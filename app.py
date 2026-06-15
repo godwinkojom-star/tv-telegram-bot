@@ -1,11 +1,10 @@
 
 import os
 import logging
-import imaplib
-import email
-from email.header import decode_header
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 import requests
+
+from smc_analysis import analyze_candles
 
 app = Flask(__name__)
 
@@ -14,86 +13,119 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "PUT_YOUR_CHAT_ID_HERE")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-# --- GMAIL CONFIG (for free email-to-webhook bridge) ---
-GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "PUT_YOUR_GMAIL_HERE")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "PUT_YOUR_APP_PASSWORD_HERE")
-IMAP_SERVER = "imap.gmail.com"
+# --- TWELVE DATA CONFIG (for forex) ---
+TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
+
+# --- WATCHLISTS ---
+CRYPTO_PAIRS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+    "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "TONUSDT",
+]
+
+FOREX_PAIRS = [
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
+]
+
+CRYPTO_TIMEFRAMES = {
+    "1H": "1h",
+    "4H": "4h",
+    "1D": "1d",
+}
+
+FOREX_TIMEFRAMES = {
+    "1H": "1h",
+    "4H": "4h",
+    "1D": "1day",
+}
 
 
 @app.route("/", methods=["GET"])
 def home():
-    return "TradingView -> Telegram bridge is running.", 200
+    return "SmartFX Signal Bot is running.", 200
 
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        if request.is_json:
-            data = request.get_json()
-            message = data.get("message") if isinstance(data, dict) and "message" in data else str(data)
-        else:
-            message = request.data.decode("utf-8")
-
-        if not message:
-            message = "Received an empty alert from TradingView."
-
-        send_to_telegram(message)
-        logging.info(f"Forwarded webhook alert: {message}")
-        return jsonify({"status": "ok"}), 200
-
-    except Exception as e:
-        logging.error(f"Error processing webhook: {e}")
-        return jsonify({"status": "error", "detail": str(e)}), 500
+def get_binance_candles(symbol, interval, limit=100):
+    """Fetch OHLC candles from Binance public API (no account needed)."""
+    url = "https://api.binance.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    raw = resp.json()
+    candles = []
+    for c in raw:
+        candles.append({
+            "open": float(c[1]),
+            "high": float(c[2]),
+            "low": float(c[3]),
+            "close": float(c[4]),
+        })
+    return candles
 
 
-@app.route("/check-email", methods=["GET"])
-def check_email():
-    try:
-        forwarded = 0
-        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-        mail.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        mail.select("inbox")
+def get_twelvedata_candles(symbol, interval, limit=100):
+    """Fetch OHLC candles from Twelve Data (free tier, requires API key)."""
+    if not TWELVE_DATA_API_KEY:
+        return None
 
-        status, messages = mail.search(None, '(UNSEEN FROM "noreply@tradingview.com")')
+    url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "outputsize": limit,
+        "apikey": TWELVE_DATA_API_KEY,
+    }
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
 
-        if status == "OK":
-            email_ids = messages[0].split()
-            for eid in email_ids:
-                status, msg_data = mail.fetch(eid, "(RFC822)")
-                if status != "OK":
-                    continue
+    if "values" not in data:
+        logging.warning(f"Twelve Data error for {symbol}: {data}")
+        return None
 
-                msg = email.message_from_bytes(msg_data[0][1])
+    values = list(reversed(data["values"]))
+    candles = []
+    for c in values:
+        candles.append({
+            "open": float(c["open"]),
+            "high": float(c["high"]),
+            "low": float(c["low"]),
+            "close": float(c["close"]),
+        })
+    return candles
 
-                subject, encoding = decode_header(msg["Subject"])[0]
-                if isinstance(subject, bytes):
-                    subject = subject.decode(encoding or "utf-8")
 
-                body = ""
-                if msg.is_multipart():
-                    for part in msg.walk():
-                        content_type = part.get_content_type()
-                        if content_type == "text/plain":
-                            body = part.get_payload(decode=True).decode(errors="ignore")
-                            break
-                else:
-                    body = msg.get_payload(decode=True).decode(errors="ignore")
+def format_signal_message(symbol, timeframe, market, signal):
+    direction = signal["direction"]
+    emoji = "🟢" if direction == "BUY" else "🔴"
+    side = "LONG" if direction == "BUY" else "SHORT"
 
-                full_message = f"<b>{subject}</b>\n\n{body.strip()}"
-                send_to_telegram(full_message)
-                forwarded += 1
+    entry = signal["entry"]
+    sl = signal["sl"]
+    tp1 = signal["tp1"]
+    tp2 = signal["tp2"]
+    tp3 = signal["tp3"]
 
-                mail.store(eid, "+FLAGS", "\\Seen")
+    sl_pct = abs((sl - entry) / entry) * 100
+    tp1_pct = abs((tp1 - entry) / entry) * 100
+    tp2_pct = abs((tp2 - entry) / entry) * 100
+    tp3_pct = abs((tp3 - entry) / entry) * 100
 
-        mail.logout()
-        logging.info(f"Checked email. Forwarded {forwarded} new alert(s).")
-        return jsonify({"status": "ok", "forwarded": forwarded}), 200
-
-    except Exception as e:
-        logging.error(f"Error checking email: {e}")
-        return jsonify({"status": "error", "detail": str(e)}), 500
+    msg = (
+        f"{emoji} <b>SmartFX Alert</b> — <b>{direction} / {side}</b>\n\n"
+        f"<b>Ticker:</b> {symbol}\n"
+        f"<b>Market:</b> {market}\n"
+        f"<b>Timeframe:</b> {timeframe}\n"
+        f"<b>Strategy:</b> SMC Confluence\n\n"
+        f"🎯 <b>Entry:</b> {entry}\n"
+        f"🛑 <b>Stop Loss:</b> {sl} (-{sl_pct:.1f}%)\n"
+        f"💚 <b>TP1:</b> {tp1} (+{tp1_pct:.1f}%)\n"
+        f"💛 <b>TP2:</b> {tp2} (+{tp2_pct:.1f}%)\n"
+        f"🏆 <b>TP3:</b> {tp3} (+{tp3_pct:.1f}%)\n\n"
+        f"<i>Trading involves risk. Not financial advice.</i>"
+    )
+    return msg
 
 
 def send_to_telegram(message: str):
@@ -104,6 +136,232 @@ def send_to_telegram(message: str):
     }
     response = requests.post(TELEGRAM_API_URL, json=payload, timeout=10)
     response.raise_for_status()
+
+import os
+import logging
+from flask import Flask, jsonify
+import requests
+
+from smc_analysis import analyze_candles
+
+app = Flask(__name__)
+
+# --- TELEGRAM CONFIG ---
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "PUT_YOUR_CHAT_ID_HERE")
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+# --- TWELVE DATA CONFIG (for forex) ---
+TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "")
+
+logging.basicConfig(level=logging.INFO)
+
+# --- WATCHLISTS ---
+CRYPTO_PAIRS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+    "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "TONUSDT",
+]
+
+FOREX_PAIRS = [
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
+]
+
+CRYPTO_TIMEFRAMES = {
+    "1H": "1h",
+    "4H": "4h",
+    "1D": "1d",
+}
+
+FOREX_TIMEFRAMES = {
+    "1H": "1h",
+    "4H": "4h",
+    "1D": "1day",
+}
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return "SmartFX Signal Bot is running.", 200
+
+
+def get_binance_candles(symbol, interval, limit=100):
+    """Fetch OHLC candles from Binance public API (no account needed)."""
+    url = "https://api.binance.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    raw = resp.json()
+    candles = []
+    for c in raw:
+        candles.append({
+            "open": float(c[1]),
+            "high": float(c[2]),
+            "low": float(c[3]),
+            "close": float(c[4]),
+        })
+    return candles
+
+
+def get_twelvedata_candles(symbol, interval, limit=100):
+    """Fetch OHLC candles from Twelve Data (free tier, requires API key)."""
+    if not TWELVE_DATA_API_KEY:
+        return None
+
+    url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "outputsize": limit,
+        "apikey": TWELVE_DATA_API_KEY,
+    }
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if "values" not in data:
+        logging.warning(f"Twelve Data error for {symbol}: {data}")
+        return None
+
+    values = list(reversed(data["values"]))
+    candles = []
+    for c in values:
+        candles.append({
+            "open": float(c["open"]),
+            "high": float(c["high"]),
+            "low": float(c["low"]),
+            "close": float(c["close"]),
+        })
+    return candles
+
+
+def format_signal_message(symbol, timeframe, market, signal):
+    direction = signal["direction"]
+    emoji = "🟢" if direction == "BUY" else "🔴"
+    side = "LONG" if direction == "BUY" else "SHORT"
+
+    entry = signal["entry"]
+    sl = signal["sl"]
+    tp1 = signal["tp1"]
+    tp2 = signal["tp2"]
+    tp3 = signal["tp3"]
+
+    sl_pct = abs((sl - entry) / entry) * 100
+    tp1_pct = abs((tp1 - entry) / entry) * 100
+    tp2_pct = abs((tp2 - entry) / entry) * 100
+    tp3_pct = abs((tp3 - entry) / entry) * 100
+
+    msg = (
+        f"{emoji} <b>SmartFX Alert</b> — <b>{direction} / {side}</b>\n\n"
+        f"<b>Ticker:</b> {symbol}\n"
+        f"<b>Market:</b> {market}\n"
+        f"<b>Timeframe:</b> {timeframe}\n"
+        f"<b>Strategy:</b> SMC Confluence\n\n"
+        f"🎯 <b>Entry:</b> {entry}\n"
+        f"🛑 <b>Stop Loss:</b> {sl} (-{sl_pct:.1f}%)\n"
+        f"💚 <b>TP1:</b> {tp1} (+{tp1_pct:.1f}%)\n"
+        f"💛 <b>TP2:</b> {tp2} (+{tp2_pct:.1f}%)\n"
+        f"🏆 <b>TP3:</b> {tp3} (+{tp3_pct:.1f}%)\n\n"
+        f"<i>Trading involves risk. Not financial advice.</i>"
+    )
+    return msg
+
+
+def send_to_telegram(message: str):
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+    response = requests.post(TELEGRAM_API_URL, json=payload, timeout=10)
+    response.raise_for_status()
+
+
+@app.route("/analyze/crypto", methods=["GET"])
+def analyze_crypto():
+    """Analyze all crypto pairs across all timeframes, send signals found."""
+    results = []
+    for symbol in CRYPTO_PAIRS:
+        for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
+            try:
+                candles = get_binance_candles(symbol, tf_interval, limit=100)
+                signal = analyze_candles(candles)
+                if signal:
+                    msg = format_signal_message(symbol, tf_label, "Crypto", signal)
+                    send_to_telegram(msg)
+                    results.append({"symbol": symbol, "timeframe": tf_label, "signal": signal})
+            except Exception as e:
+                logging.error(f"Error analyzing {symbol} {tf_label}: {e}")
+
+    return jsonify({"status": "ok", "signals_sent": len(results), "details": results}), 200
+
+
+@app.route("/analyze/forex", methods=["GET"])
+def analyze_forex():
+    """Analyze all forex pairs across all timeframes, send signals found."""
+    if not TWELVE_DATA_API_KEY:
+        return jsonify({"status": "error", "detail": "TWELVE_DATA_API_KEY not set"}), 400
+
+    results = []
+    for symbol in FOREX_PAIRS:
+        for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
+            try:
+                candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
+                if not candles:
+                    continue
+                signal = analyze_candles(candles)
+                if signal:
+                    msg = format_signal_message(symbol, tf_label, "Forex", signal)
+                    send_to_telegram(msg)
+                    results.append({"symbol": symbol, "timeframe": tf_label, "signal": signal})
+            except Exception as e:
+                logging.error(f"Error analyzing {symbol} {tf_label}: {e}")
+
+    return jsonify({"status": "ok", "signals_sent": len(results), "details": results}), 200
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+@app.route("/analyze/crypto", methods=["GET"])
+def analyze_crypto():
+    """Analyze all crypto pairs across all timeframes, send signals found."""
+    results = []
+    for symbol in CRYPTO_PAIRS:
+        for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
+            try:
+                candles = get_binance_candles(symbol, tf_interval, limit=100)
+                signal = analyze_candles(candles)
+                if signal:
+                    msg = format_signal_message(symbol, tf_label, "Crypto", signal)
+                    send_to_telegram(msg)
+                    results.append({"symbol": symbol, "timeframe": tf_label, "signal": signal})
+            except Exception as e:
+                logging.error(f"Error analyzing {symbol} {tf_label}: {e}")
+
+    return jsonify({"status": "ok", "signals_sent": len(results), "details": results}), 200
+
+
+@app.route("/analyze/forex", methods=["GET"])
+def analyze_forex():
+    """Analyze all forex pairs across all timeframes, send signals found."""
+    if not TWELVE_DATA_API_KEY:
+        return jsonify({"status": "error", "detail": "TWELVE_DATA_API_KEY not set"}), 400
+
+    results = []
+    for symbol in FOREX_PAIRS:
+        for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
+            try:
+                candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
+                if not candles:
+                    continue
+                signal = analyze_candles(candles)
+                if signal:
+                    msg = format_signal_message(symbol, tf_label, "Forex", signal)
+                    send_to_telegram(msg)
+                    results.append({"symbol": symbol, "timeframe": tf_label, "signal": signal})
+            except Exception as e:
+                logging.error(f"Error analyzing {symbol} {tf_label}: {e}")
+
+    return jsonify({"status": "ok", "signals_sent": len(results), "details": results}), 200
 
 
 if __name__ == "__main__":
