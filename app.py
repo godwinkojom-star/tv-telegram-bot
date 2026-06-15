@@ -43,7 +43,15 @@ FOREX_TIMEFRAMES = {
 @app.route("/", methods=["GET"])
 def home():
     return "SmartFX Signal Bot is running.", 200
-
+    
+@app.route("/test-telegram", methods=["GET"])
+def test_telegram():
+    """Sends a simple test message to Telegram to confirm the connection works."""
+    try:
+        send_to_telegram("✅ Test message from SmartFX Signal Bot. If you see this, the connection works!")
+        return jsonify({"status": "ok", "message": "Test message sent"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "detail": str(e)}), 500
 
 def get_binance_candles(symbol, interval, limit=100):
     """Fetch OHLC candles from Binance public API (no account needed)."""
