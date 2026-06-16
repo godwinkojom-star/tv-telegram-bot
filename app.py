@@ -58,7 +58,8 @@ def get_binance_candles(symbol, interval, limit=100):
     """Fetch OHLC candles from Binance public API (no account needed)."""
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
-    resp = requests.get(url, params=params, timeout=15)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    resp = requests.get(url, params=params, headers=headers, timeout=15)
     resp.raise_for_status()
     raw = resp.json()
     candles = []
