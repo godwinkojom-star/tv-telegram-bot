@@ -199,8 +199,10 @@ def daily_summary():
             try:
                 get_binance_candles(symbol, tf_interval, limit=10)
                 crypto_checked += 1
-            except Exception:
+                time.sleep(0.5)
+            except Exception as e:
                 crypto_errors += 1
+                logging.error(f"Daily summary crypto check failed for {symbol} {tf_label}: {e}")
 
     forex_checked = 0
     forex_errors = 0
