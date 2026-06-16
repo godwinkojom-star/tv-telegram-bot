@@ -175,7 +175,7 @@ def analyze_forex():
         for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
             try:
                 candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
-                time.sleep(8)
+                time.sleep(4)
                 if not candles:
                     continue
                 signal = analyze_candles(candles)
