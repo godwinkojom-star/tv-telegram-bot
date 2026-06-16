@@ -189,5 +189,43 @@ def analyze_forex():
     return jsonify({"status": "ok", "signals_sent": len(results), "details": results}), 200
 
 
+@app.route("/daily-summary", methods=["GET"])
+def daily_summary():
+    """Sends a daily confirmation message that the bot is alive and checked all markets."""
+    crypto_checked = 0
+    crypto_errors = 0
+    for symbol in CRYPTO_PAIRS:
+        for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
+            try:
+                get_binance_candles(symbol, tf_interval, limit=10)
+                crypto_checked += 1
+            except Exception:
+                crypto_errors += 1
+
+    forex_checked = 0
+    forex_errors = 0
+    if TWELVE_DATA_API_KEY:
+        for symbol in FOREX_PAIRS:
+            try:
+                candles = get_twelvedata_candles(symbol, "1day", limit=10)
+                if candles:
+                    forex_checked += 1
+                else:
+                    forex_errors += 1
+                time.sleep(4)
+            except Exception:
+                forex_errors += 1
+
+    msg = (
+        f"📊 <b>Daily Bot Status</b>\n\n"
+        f"✅ Crypto pairs checked: {crypto_checked}/{len(CRYPTO_PAIRS)}\n"
+        f"✅ Forex pairs checked: {forex_checked}/{len(FOREX_PAIRS)}\n\n"
+        f"Bot is alive and monitoring the markets. "
+        f"You'll get a separate alert the moment a real BUY/SELL setup appears."
+    )
+    send_to_telegram(msg)
+    return jsonify({"status": "ok", "crypto_checked": crypto_checked, "forex_checked": forex_checked}), 200
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
