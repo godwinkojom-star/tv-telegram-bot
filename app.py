@@ -193,42 +193,51 @@ def analyze_forex():
 
 @app.route("/daily-summary", methods=["GET"])
 def daily_summary():
-    """Sends a daily confirmation message that the bot is alive and checked all markets."""
-    crypto_checked = 0
-    crypto_errors = 0
-    for symbol in CRYPTO_PAIRS:
-        for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
-            try:
-                get_binance_candles(symbol, tf_interval, limit=10)
-                crypto_checked += 1
-                time.sleep(0.5)
-            except Exception as e:
-                crypto_errors += 1
-                logging.error(f"Daily summary crypto check failed for {symbol} {tf_label}: {e}")
+    """
+    Lightweight 'is the bot alive' ping.
 
-    forex_checked = 0
-    forex_errors = 0
+    NOTE: This used to loop over all 10 crypto pairs x 3 timeframes (30 calls)
+    plus all 5 forex pairs (5 calls, 4s sleep each) = 35 sequential network
+    round-trips in one request. On Render's free tier that occasionally
+    stacked up enough latency to blow past the gunicorn worker timeout,
+    which kills the worker mid-request (no clean error, no log output) -
+    that's what was causing the Internal Server Error.
+
+    Fix: just check ONE crypto pair and ONE forex pair as a connectivity
+    check, instead of re-checking everything the scheduled /analyze routes
+    already check every 15 min / hour.
+    """
+    crypto_test_symbol = CRYPTO_PAIRS[0]
+    forex_test_symbol = FOREX_PAIRS[0]
+
+    crypto_ok = False
+    try:
+        get_binance_candles(crypto_test_symbol, "1h", limit=2)
+        crypto_ok = True
+    except Exception as e:
+        logging.error(f"Daily summary crypto check failed for {crypto_test_symbol}: {e}")
+
+    forex_ok = False
+    forex_status = "not configured"
     if TWELVE_DATA_API_KEY:
-        for symbol in FOREX_PAIRS:
-            try:
-                candles = get_twelvedata_candles(symbol, "1day", limit=10)
-                if candles:
-                    forex_checked += 1
-                else:
-                    forex_errors += 1
-                time.sleep(4)
-            except Exception:
-                forex_errors += 1
+        try:
+            candles = get_twelvedata_candles(forex_test_symbol, "1day", limit=2)
+            forex_ok = bool(candles)
+            forex_status = "OK" if forex_ok else "FAILED"
+        except Exception as e:
+            forex_status = "FAILED"
+            logging.error(f"Daily summary forex check failed for {forex_test_symbol}: {e}")
 
     msg = (
         f"📊 <b>Daily Bot Status</b>\n\n"
-        f"✅ Crypto pairs checked: {crypto_checked}/{len(CRYPTO_PAIRS)}\n"
-        f"✅ Forex pairs checked: {forex_checked}/{len(FOREX_PAIRS)}\n\n"
-        f"Bot is alive and monitoring the markets. "
+        f"✅ Crypto data source: {'OK' if crypto_ok else 'FAILED'} ({crypto_test_symbol})\n"
+        f"✅ Forex data source: {forex_status} ({forex_test_symbol})\n\n"
+        f"Monitoring {len(CRYPTO_PAIRS)} crypto pairs every 15 min and "
+        f"{len(FOREX_PAIRS)} forex pairs every hour. "
         f"You'll get a separate alert the moment a real BUY/SELL setup appears."
     )
     send_to_telegram(msg)
-    return jsonify({"status": "ok", "crypto_checked": crypto_checked, "forex_checked": forex_checked}), 200
+    return jsonify({"status": "ok", "crypto_ok": crypto_ok, "forex_ok": forex_ok}), 200
 
 
 if __name__ == "__main__":
