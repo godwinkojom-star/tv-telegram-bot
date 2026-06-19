@@ -163,7 +163,7 @@ def analyze_crypto():
             except Exception as e:
                 logging.error(f"Error analyzing {symbol} {tf_label}: {e}")
 
-    return jsonify({"status": "ok", "signals_sent": len(results), "details": results}), 200
+    return jsonify({"status": "ok", "signals_sent": len(results)}), 200
 
 
 @app.route("/analyze/forex", methods=["GET"])
@@ -188,7 +188,7 @@ def analyze_forex():
             except Exception as e:
                 logging.error(f"Error analyzing {symbol} {tf_label}: {e}")
 
-    return jsonify({"status": "ok", "signals_sent": len(results), "details": results}), 200
+    return jsonify({"status": "ok", "signals_sent": len(results)}), 200
 
 
 @app.route("/daily-summary", methods=["GET"])
