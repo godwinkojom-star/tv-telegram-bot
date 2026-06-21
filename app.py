@@ -110,6 +110,7 @@ def get_twelvedata_candles(symbol, interval, limit=100):
 
 def format_signal_message(symbol, timeframe, market, signal):
     direction = signal["direction"]
+    confidence = signal.get("confidence", 0)
     emoji = "🟢" if direction == "BUY" else "🔴"
     side = "LONG" if direction == "BUY" else "SHORT"
 
