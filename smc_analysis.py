@@ -1,6 +1,6 @@
 """
-EMA + RSI + ATR Strategy (CLEAN VERSION)
-No external libraries required.
+SmartFX Signal Bot - FINAL STABLE VERSION
+EMA + RSI + ATR + Confidence + Market Filter
 """
 
 def calculate_ema(prices, period):
@@ -65,12 +65,17 @@ def calculate_atr(candles, period=14):
     return sum(tr_values[-period:]) / period
 
 
-def recent_swing_low(candles, lookback=10):
-    return min(c["low"] for c in candles[-lookback:])
+def market_strength(candles, period=14):
+    if len(candles) < period + 1:
+        return 0
 
+    closes = [c["close"] for c in candles[-period:]]
 
-def recent_swing_high(candles, lookback=10):
-    return max(c["high"] for c in candles[-lookback:])
+    moves = []
+    for i in range(1, len(closes)):
+        moves.append(abs(closes[i] - closes[i - 1]))
+
+    return sum(moves) / period
 
 
 def analyze_candles(candles):
@@ -87,6 +92,10 @@ def analyze_candles(candles):
     if ema20 is None or ema50 is None or rsi is None or atr is None:
         return None
 
+    strength = market_strength(candles)
+    if strength < atr * 0.5:
+        return None
+
     entry = closes[-1]
 
     # BUY SETUP
@@ -94,18 +103,29 @@ def analyze_candles(candles):
         sl = entry - (atr * 1.5)
 
         risk = entry - sl
-
         if risk <= 0:
             return None
 
+        confidence = 0
+        if ema20 > ema50:
+            confidence += 40
+        if rsi > 55:
+            confidence += 30
+        if entry > ema20:
+            confidence += 30
+
+        tp1 = entry + (atr * 1.0)
+        tp2 = entry + (atr * 2.0)
+        tp3 = entry + (atr * 3.5)
+
         return {
             "direction": "BUY",
-            "confidence": 80,
+            "confidence": confidence,
             "entry": round(entry, 6),
             "sl": round(sl, 6),
-            "tp1": round(entry * 1.01, 6),
-            "tp2": round(entry * 1.02, 6),
-            "tp3": round(entry * 1.03, 6),
+            "tp1": round(tp1, 6),
+            "tp2": round(tp2, 6),
+            "tp3": round(tp3, 6),
         }
 
     # SELL SETUP
@@ -113,18 +133,29 @@ def analyze_candles(candles):
         sl = entry + (atr * 1.5)
 
         risk = sl - entry
-
         if risk <= 0:
             return None
 
+        confidence = 0
+        if ema20 < ema50:
+            confidence += 40
+        if rsi < 45:
+            confidence += 30
+        if entry < ema20:
+            confidence += 30
+
+        tp1 = entry - (atr * 1.0)
+        tp2 = entry - (atr * 2.0)
+        tp3 = entry - (atr * 3.5)
+
         return {
             "direction": "SELL",
-            "confidence": 80,
+            "confidence": confidence,
             "entry": round(entry, 6),
             "sl": round(sl, 6),
-            "tp1": round(entry * 0.99, 6),
-            "tp2": round(entry * 0.98, 6),
-            "tp3": round(entry * 0.97, 6),
+            "tp1": round(tp1, 6),
+            "tp2": round(tp2, 6),
+            "tp3": round(tp3, 6),
         }
 
     return None
