@@ -77,30 +77,32 @@ def analyze_candles(candles):
             return None
 
         return {
-            "direction": "BUY",
-            "entry": round(entry, 6),
-            "sl": round(sl, 6),
-            "tp1": round(entry + risk, 6),
-            "tp2": round(entry + risk * 2, 6),
-            "tp3": round(entry + risk * 3, 6),
+    "direction": "BUY",
+    "entry": round(entry, 6),
+    "sl": round(sl, 6),
+    "tp1": round(entry * 1.01, 6),
+    "tp2": round(entry * 1.02, 6),
+    "tp3": round(entry * 1.03, 6),
         }
 
     # SELL SETUP
-    if ema20 < ema50 and rsi < 45:
-        sl = recent_swing_high(candles)
+if ema20 < ema50 and rsi < 45:
+    sl = recent_swing_high(candles)
 
-        risk = sl - entry
+    risk = sl - entry
 
-        if risk <= 0:
-            return None
+    if risk <= 0:
+        return None
 
-        return {
-            "direction": "SELL",
-            "entry": round(entry, 6),
-            "sl": round(sl, 6),
-            "tp1": round(entry - risk, 6),
-            "tp2": round(entry - risk * 2, 6),
-            "tp3": round(entry - risk * 3, 6),
-        }
+    return {
+        "direction": "SELL",
+        "entry": round(entry, 6),
+        "sl": round(sl, 6),
+        "tp1": round(entry * 0.99, 6),
+        "tp2": round(entry * 0.98, 6),
+        "tp3": round(entry * 0.97, 6),
+    }
 
-    return None
+return None
+
+
