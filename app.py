@@ -18,6 +18,8 @@ TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
 
+LAST_SIGNALS = {}
+
 # --- WATCHLISTS ---
 CRYPTO_PAIRS = [
     "BTCUSDT",
@@ -147,6 +149,18 @@ def send_to_telegram(message: str):
     response = requests.post(TELEGRAM_API_URL, json=payload, timeout=10)
     response.raise_for_status()
 
+def should_send_signal(symbol, timeframe, signal):
+    key = f"{symbol}_{timeframe}"
+
+    current_direction = signal["direction"]
+    previous_direction = LAST_SIGNALS.get(key)
+
+    if previous_direction == current_direction:
+        return False
+
+    LAST_SIGNALS[key] = current_direction
+    return True
+
 
 @app.route("/analyze/crypto", methods=["GET"])
 def analyze_crypto():
@@ -157,7 +171,7 @@ def analyze_crypto():
             try:
                 candles = get_binance_candles(symbol, tf_interval, limit=100)
                 signal = analyze_candles(candles)
-                if signal:
+                if signal and should_send_signal(symbol, tf_label, signal):
                     msg = format_signal_message(symbol, tf_label, "Crypto", signal)
                     send_to_telegram(msg)
                     results.append({"symbol": symbol, "timeframe": tf_label, "signal": signal})
@@ -182,7 +196,7 @@ def analyze_forex():
                 if not candles:
                     continue
                 signal = analyze_candles(candles)
-                if signal:
+                if signal and should_send_signal(symbol, tf_label, signal):
                     msg = format_signal_message(symbol, tf_label, "Forex", signal)
                     send_to_telegram(msg)
                     results.append({"symbol": symbol, "timeframe": tf_label, "signal": signal})
