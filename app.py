@@ -109,11 +109,9 @@ def get_twelvedata_candles(symbol, interval, limit=100):
 
 
 def format_signal_message(symbol, timeframe, market, signal):
-    direction = signal["direction"]
-    emoji = "🟢" if direction == "BUY" else "🔴"
-    side = "LONG" if direction == "BUY" else "SHORT"
-    
+    direction = signal.get("direction", "")
     confidence = signal.get("confidence", 0)
+    risk = signal.get("risk", "UNKNOWN")
 
     entry = signal["entry"]
     sl = signal["sl"]
@@ -121,25 +119,31 @@ def format_signal_message(symbol, timeframe, market, signal):
     tp2 = signal["tp2"]
     tp3 = signal["tp3"]
 
+    side = "LONG" if "BUY" in direction else "SHORT"
+
     sl_pct = abs((sl - entry) / entry) * 100
     tp1_pct = abs((tp1 - entry) / entry) * 100
     tp2_pct = abs((tp2 - entry) / entry) * 100
     tp3_pct = abs((tp3 - entry) / entry) * 100
 
     msg = (
-        f"{emoji} <b>SmartFX Alert</b> — <b>{direction} / {side}</b>\n\n"
-        f"<b>Ticker:</b> {symbol}\n"
-        f"<b>Market:</b> {market}\n"
-        f"<b>Timeframe:</b> {timeframe}\n"
-        f"<b>Strategy:</b> SMC Confluence\n\n"
-        f"<b>Confidence:</b> {confidence}%\n"
-        f"🎯 <b>Entry:</b> {entry}\n"
-        f"🛑 <b>Stop Loss:</b> {sl} (-{sl_pct:.1f}%)\n"
-        f"💚 <b>TP1:</b> {tp1} (+{tp1_pct:.1f}%)\n"
-        f"💛 <b>TP2:</b> {tp2} (+{tp2_pct:.1f}%)\n"
-        f"🏆 <b>TP3:</b> {tp3} (+{tp3_pct:.1f}%)\n\n"
-        f"<i>Trading involves risk. Not financial advice.</i>"
+        f"🚀 <b>SmartFX SIGNAL</b>\n\n"
+        f"📊 <b>Pair:</b> {symbol}\n"
+        f"⏱ <b>Timeframe:</b> {timeframe}\n"
+        f"🏦 <b>Market:</b> {market}\n\n"
+        f"🧠 <b>Confidence:</b> {confidence}%\n"
+        f"⚠️ <b>Risk Level:</b> {risk}\n"
+        f"🎯 <b>Direction:</b> {direction} ({side})\n\n"
+        f"💰 <b>Entry:</b> {entry}\n"
+        f"🛑 <b>Stop Loss:</b> {sl} (-{sl_pct:.2f}%)\n\n"
+        f"💚 <b>TP1:</b> {tp1} (+{tp1_pct:.2f}%)\n"
+        f"💛 <b>TP2:</b> {tp2} (+{tp2_pct:.2f}%)\n"
+        f"🏆 <b>TP3:</b> {tp3} (+{tp3_pct:.2f}%)\n\n"
+        f"⚡ <b>Signal Strength:</b> {'🔥 HIGH' if confidence >= 80 else '✅ GOOD'}\n\n"
+        f"🤖 <i>SmartFX Automated Signal</i>\n"
+        f"⚠️ <i>Trade safely. Manage risk.</i>"
     )
+
     return msg
 
 
