@@ -20,23 +20,25 @@ logging.basicConfig(level=logging.INFO)
 
 # --- WATCHLISTS ---
 CRYPTO_PAIRS = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT"
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
 ]
 
 FOREX_PAIRS = [
-    "EUR/USD","XAU/USD"
+    "EUR/USD",
+    "GBP/USD",
+    "XAU/USD",
 ]
 
 CRYPTO_TIMEFRAMES = {
+    "15M": "15m",
     "1H": "1h",
-    "4H": "4h",
-    "1D": "1d",
 }
 
 FOREX_TIMEFRAMES = {
+    "15M": "15min",
     "1H": "1h",
-    "4H": "4h",
-    "1D": "1day",
 }
 
 
