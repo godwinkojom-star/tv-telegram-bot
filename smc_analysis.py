@@ -88,7 +88,12 @@ def analyze_candles(candles):
 
     # BUY SETUP
     if ema20 > ema50 and rsi > 55:
-        sl = recent_swing_low(candles)
+        atr = calculate_atr(candles)
+
+if atr is None:
+    return None
+
+sl = entry - (atr * 1.5)
         risk = entry - sl
 
         if risk <= 0:
@@ -106,7 +111,12 @@ def analyze_candles(candles):
 
     # SELL SETUP
     if ema20 < ema50 and rsi < 45:
-        sl = recent_swing_high(candles)
+        atr = calculate_atr(candles)
+
+if atr is None:
+    return None
+
+sl = entry + (atr * 1.5)
         risk = sl - entry
 
         if risk <= 0:
