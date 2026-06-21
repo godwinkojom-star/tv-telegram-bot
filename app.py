@@ -110,9 +110,10 @@ def get_twelvedata_candles(symbol, interval, limit=100):
 
 def format_signal_message(symbol, timeframe, market, signal):
     direction = signal["direction"]
-    confidence = signal.get("confidence", 0)
     emoji = "🟢" if direction == "BUY" else "🔴"
     side = "LONG" if direction == "BUY" else "SHORT"
+    
+    confidence = signal.get("confidence", 0)
 
     entry = signal["entry"]
     sl = signal["sl"]
@@ -131,6 +132,7 @@ def format_signal_message(symbol, timeframe, market, signal):
         f"<b>Market:</b> {market}\n"
         f"<b>Timeframe:</b> {timeframe}\n"
         f"<b>Strategy:</b> SMC Confluence\n\n"
+        f"<b>Confidence:</b> {confidence}%\n"
         f"🎯 <b>Entry:</b> {entry}\n"
         f"🛑 <b>Stop Loss:</b> {sl} (-{sl_pct:.1f}%)\n"
         f"💚 <b>TP1:</b> {tp1} (+{tp1_pct:.1f}%)\n"
