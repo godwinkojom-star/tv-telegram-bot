@@ -1,28 +1,8 @@
 """
-EMA + RSI Strategy
+EMA + RSI + ATR Strategy (CLEAN VERSION)
 No external libraries required.
 """
-def calculate_atr(candles, period=14):
-    if len(candles) < period + 1:
-        return None
 
-    tr_values = []
-
-    for i in range(1, len(candles)):
-        high = candles[i]["high"]
-        low = candles[i]["low"]
-        prev_close = candles[i - 1]["close"]
-
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
-
-        tr_values.append(tr)
-
-    atr = sum(tr_values[-period:]) / period
-    return atr
 def calculate_ema(prices, period):
     if len(prices) < period:
         return None
@@ -63,6 +43,28 @@ def calculate_rsi(closes, period=14):
     return 100 - (100 / (1 + rs))
 
 
+def calculate_atr(candles, period=14):
+    if len(candles) < period + 1:
+        return None
+
+    tr_values = []
+
+    for i in range(1, len(candles)):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        prev_close = candles[i - 1]["close"]
+
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+
+        tr_values.append(tr)
+
+    return sum(tr_values[-period:]) / period
+
+
 def recent_swing_low(candles, lookback=10):
     return min(c["low"] for c in candles[-lookback:])
 
@@ -80,56 +82,49 @@ def analyze_candles(candles):
     ema20 = calculate_ema(closes, 20)
     ema50 = calculate_ema(closes, 50)
     rsi = calculate_rsi(closes)
+    atr = calculate_atr(candles)
 
-    if ema20 is None or ema50 is None or rsi is None:
+    if ema20 is None or ema50 is None or rsi is None or atr is None:
         return None
 
     entry = closes[-1]
 
     # BUY SETUP
     if ema20 > ema50 and rsi > 55:
-    atr = calculate_atr(candles)
+        sl = entry - (atr * 1.5)
 
-    if atr is None:
-        return None
+        risk = entry - sl
 
-    sl = entry - (atr * 1.5)
+        if risk <= 0:
+            return None
 
-    risk = entry - sl
-
-    if risk <= 0:
-        return None
-
-    return {
-        "direction": "BUY",
-        "entry": round(entry, 6),
-        "sl": round(sl, 6),
-        "tp1": round(entry * 1.01, 6),
-        "tp2": round(entry * 1.02, 6),
-        "tp3": round(entry * 1.03, 6),
-    }
+        return {
+            "direction": "BUY",
+            "confidence": 80,
+            "entry": round(entry, 6),
+            "sl": round(sl, 6),
+            "tp1": round(entry * 1.01, 6),
+            "tp2": round(entry * 1.02, 6),
+            "tp3": round(entry * 1.03, 6),
+        }
 
     # SELL SETUP
     if ema20 < ema50 and rsi < 45:
-    atr = calculate_atr(candles)
+        sl = entry + (atr * 1.5)
 
-    if atr is None:
-        return None
+        risk = sl - entry
 
-    sl = entry + (atr * 1.5)
+        if risk <= 0:
+            return None
 
-    risk = sl - entry
-
-    if risk <= 0:
-        return None
-
-    return {
-        "direction": "SELL",
-        "entry": round(entry, 6),
-        "sl": round(sl, 6),
-        "tp1": round(entry * 0.99, 6),
-        "tp2": round(entry * 0.98, 6),
-        "tp3": round(entry * 0.97, 6),
-    }
+        return {
+            "direction": "SELL",
+            "confidence": 80,
+            "entry": round(entry, 6),
+            "sl": round(sl, 6),
+            "tp1": round(entry * 0.99, 6),
+            "tp2": round(entry * 0.98, 6),
+            "tp3": round(entry * 0.97, 6),
+        }
 
     return None
