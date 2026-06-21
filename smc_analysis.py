@@ -88,48 +88,48 @@ def analyze_candles(candles):
 
     # BUY SETUP
     if ema20 > ema50 and rsi > 55:
-        atr = calculate_atr(candles)
+    atr = calculate_atr(candles)
 
-if atr is None:
-    return None
+    if atr is None:
+        return None
 
-sl = entry - (atr * 1.5)
-        risk = entry - sl
+    sl = entry - (atr * 1.5)
 
-        if risk <= 0:
-            return None
+    risk = entry - sl
 
-        return {
-    "direction": "BUY",
-    "confidence": score,
-    "entry": round(entry, 6),
-    "sl": round(sl, 6),
-    "tp1": round(entry * 1.01, 6),
-    "tp2": round(entry * 1.02, 6),
-    "tp3": round(entry * 1.03, 6),
-        }
+    if risk <= 0:
+        return None
+
+    return {
+        "direction": "BUY",
+        "entry": round(entry, 6),
+        "sl": round(sl, 6),
+        "tp1": round(entry * 1.01, 6),
+        "tp2": round(entry * 1.02, 6),
+        "tp3": round(entry * 1.03, 6),
+    }
 
     # SELL SETUP
     if ema20 < ema50 and rsi < 45:
-        atr = calculate_atr(candles)
+    atr = calculate_atr(candles)
 
-if atr is None:
-    return None
+    if atr is None:
+        return None
 
-sl = entry + (atr * 1.5)
-        risk = sl - entry
+    sl = entry + (atr * 1.5)
 
-        if risk <= 0:
-            return None
+    risk = sl - entry
 
-        return {
-    "direction": "SELL",
-    "confidence": score,
-    "entry": round(entry, 6),
-    "sl": round(sl, 6),
-    "tp1": round(entry * 0.99, 6),
-    "tp2": round(entry * 0.98, 6),
-    "tp3": round(entry * 0.97, 6),
-        }
+    if risk <= 0:
+        return None
+
+    return {
+        "direction": "SELL",
+        "entry": round(entry, 6),
+        "sl": round(sl, 6),
+        "tp1": round(entry * 0.99, 6),
+        "tp2": round(entry * 0.98, 6),
+        "tp3": round(entry * 0.97, 6),
+    }
 
     return None
