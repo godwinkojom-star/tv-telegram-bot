@@ -75,12 +75,13 @@ def analyze_candles(candles):
             return None
 
         return {
-            "direction": "BUY",
-            "entry": round(entry, 6),
-            "sl": round(sl, 6),
-            "tp1": round(entry * 1.01, 6),
-            "tp2": round(entry * 1.02, 6),
-            "tp3": round(entry * 1.03, 6),
+    "direction": "BUY",
+    "confidence": score,
+    "entry": round(entry, 6),
+    "sl": round(sl, 6),
+    "tp1": round(entry * 1.01, 6),
+    "tp2": round(entry * 1.02, 6),
+    "tp3": round(entry * 1.03, 6),
         }
 
     # SELL SETUP
@@ -92,12 +93,13 @@ def analyze_candles(candles):
             return None
 
         return {
-            "direction": "SELL",
-            "entry": round(entry, 6),
-            "sl": round(sl, 6),
-            "tp1": round(entry * 0.99, 6),
-            "tp2": round(entry * 0.98, 6),
-            "tp3": round(entry * 0.97, 6),
+    "direction": "SELL",
+    "confidence": score,
+    "entry": round(entry, 6),
+    "sl": round(sl, 6),
+    "tp1": round(entry * 0.99, 6),
+    "tp2": round(entry * 0.98, 6),
+    "tp3": round(entry * 0.97, 6),
         }
 
     return None
