@@ -1,5 +1,6 @@
 """
-SmartFX Signal Bot - FULL WORKING VERSION
+SmartFX Signal Bot - FINAL VERSION (WITH EMOJIS)
+EMA + RSI + ATR + Confidence + Risk Filter
 """
 
 def calculate_ema(prices, period):
@@ -93,18 +94,21 @@ def analyze_candles(candles):
 
     entry = closes[-1]
 
+    # Market filter
     strength = market_strength(candles)
     if strength < atr * 0.5:
         return None
 
-    risk_level = "LOW"
+    # Risk level
+    risk_level = "🟢 LOW"
     if atr > entry * 0.01:
-        risk_level = "HIGH"
+        risk_level = "🔴 HIGH"
     elif atr > entry * 0.005:
-        risk_level = "MEDIUM"
+        risk_level = "🟡 MEDIUM"
 
-    # BUY
+    # ================= BUY =================
     if ema20 > ema50 and rsi > 55:
+
         sl = entry - (atr * 1.5)
 
         confidence = 0
@@ -120,7 +124,7 @@ def analyze_candles(candles):
         tp3 = entry + (atr * 3.5)
 
         return {
-            "direction": "BUY",
+            "direction": "🟢 BUY",
             "confidence": confidence,
             "risk": risk_level,
             "entry": round(entry, 6),
@@ -130,8 +134,9 @@ def analyze_candles(candles):
             "tp3": round(tp3, 6),
         }
 
-    # SELL
+    # ================= SELL =================
     if ema20 < ema50 and rsi < 45:
+
         sl = entry + (atr * 1.5)
 
         confidence = 0
@@ -147,7 +152,7 @@ def analyze_candles(candles):
         tp3 = entry - (atr * 3.5)
 
         return {
-            "direction": "SELL",
+            "direction": "🔴 SELL",
             "confidence": confidence,
             "risk": risk_level,
             "entry": round(entry, 6),
