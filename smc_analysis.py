@@ -107,18 +107,32 @@ def analyze_candles(candles):
         risk_level = "🟡 MEDIUM"
 
     # ================= BUY =================
-    if ema20 > ema50 and rsi > 55:
+    if ema20 > ema50 and rsi > 60:
 
         sl = entry - (atr * 1.5)
 
-        confidence = 0
-        if ema20 > ema50:
-            confidence += 40
-        if rsi > 55:
-            confidence += 30
-        if entry > ema20:
-            confidence += 30
+        confidence = 50
 
+        gap_pct = abs(ema20 - ema50) / entry * 100
+
+        if gap_pct > 1:
+            confidence += 15
+        elif gap_pct > 0.5:
+            confidence += 10
+
+        if rsi > 70:
+            confidence += 20
+        elif rsi > 65:
+            confidence += 15
+        elif rsi > 60:
+            confidence += 10
+
+        if strength > atr:
+            confidence += 15
+
+        if confidence < 80:
+            return None
+            
         tp1 = entry + atr
         tp2 = entry + (atr * 2)
         tp3 = entry + (atr * 3.5)
@@ -135,18 +149,32 @@ def analyze_candles(candles):
         }
 
     # ================= SELL =================
-    if ema20 < ema50 and rsi < 45:
+    if ema20 < ema50 and rsi < 40:
 
         sl = entry + (atr * 1.5)
 
-        confidence = 0
-        if ema20 < ema50:
-            confidence += 40
-        if rsi < 45:
-            confidence += 30
-        if entry < ema20:
-            confidence += 30
+        confidence = 50
 
+        gap_pct = abs(ema20 - ema50) / entry * 100
+
+        if gap_pct > 1:
+            confidence += 15
+        elif gap_pct > 0.5:
+            confidence += 10
+
+        if rsi < 30:
+            confidence += 20
+        elif rsi < 35:
+            confidence += 15
+        elif rsi < 40:
+            confidence += 10
+
+        if strength > atr:
+            confidence += 15
+
+        if confidence < 80:
+            return None
+            
         tp1 = entry - atr
         tp2 = entry - (atr * 2)
         tp3 = entry - (atr * 3.5)
