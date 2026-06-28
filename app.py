@@ -243,7 +243,8 @@ def daily_summary():
     forex_status = "not configured"
     if TWELVE_DATA_API_KEY:
         try:
-            candles = get_twelvedata_candles(forex_test_symbol, "1day", limit=2)
+            # FIXED: Changed "1day" to "1h" to prevent Twelve Data helper crash
+            candles = get_twelvedata_candles(forex_test_symbol, "1h", limit=2)
             forex_ok = bool(candles)
             forex_status = "OK" if forex_ok else "FAILED"
         except Exception as e:
@@ -260,8 +261,3 @@ def daily_summary():
     )
     send_to_telegram(msg)
     return jsonify({"status": "ok", "crypto_ok": crypto_ok, "forex_ok": forex_ok}), 200
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-                       
