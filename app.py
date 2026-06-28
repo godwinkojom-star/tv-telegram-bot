@@ -115,9 +115,20 @@ def format_signal_message(symbol, timeframe, market, signal):
 
     entry = signal["entry"]
     sl = signal["sl"]
-    tp1 = signal["tp1"]
-    tp2 = signal["tp2"]
-    tp3 = signal["tp3"]
+    
+    # Calculate Risk distance
+    risk_distance = abs(entry - sl)
+    
+    # Set TPs based on Risk/Reward Ratio (1.5x and 2.0x)
+    # If Buy: entry + distance | If Sell: entry - distance
+    if "BUY" in direction:
+        tp1 = entry + (risk_distance * 1.5)
+        tp2 = entry + (risk_distance * 2.0)
+        tp3 = entry + (risk_distance * 3.0)
+    else:
+        tp1 = entry - (risk_distance * 1.5)
+        tp2 = entry - (risk_distance * 2.0)
+        tp3 = entry - (risk_distance * 3.0)
 
     side = "LONG" if "BUY" in direction else "SHORT"
 
@@ -136,15 +147,16 @@ def format_signal_message(symbol, timeframe, market, signal):
         f"🎯 <b>Direction:</b> {direction} ({side})\n\n"
         f"💰 <b>Entry:</b> {entry}\n"
         f"🛑 <b>Stop Loss:</b> {sl} (-{sl_pct:.2f}%)\n\n"
-        f"💚 <b>TP1:</b> {tp1} (+{tp1_pct:.2f}%)\n"
-        f"💛 <b>TP2:</b> {tp2} (+{tp2_pct:.2f}%)\n"
-        f"🏆 <b>TP3:</b> {tp3} (+{tp3_pct:.2f}%)\n\n"
+        f"💚 <b>TP1:</b> {tp1:.5f} (+{tp1_pct:.2f}%)\n"
+        f"💛 <b>TP2:</b> {tp2:.5f} (+{tp2_pct:.2f}%)\n"
+        f"🏆 <b>TP3:</b> {tp3:.5f} (+{tp3_pct:.2f}%)\n\n"
         f"⚡ <b>Signal Strength:</b> {'🔥 HIGH' if confidence >= 80 else '✅ GOOD'}\n\n"
         f"🤖 <i>SmartFX Automated Signal</i>\n"
         f"⚠️ <i>Trade safely. Manage risk.</i>"
     )
 
     return msg
+    
 
 
 def send_to_telegram(message: str):
