@@ -210,10 +210,17 @@ def analyze_forex():
     results = []
     for symbol in FOREX_PAIRS:
         for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
-                            if not candles:
+            try:
+                # 1. You must fetch the candles first!
+                candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
+                
+                # 2. Check if candles were returned
+                if not candles:
                     continue
-                # REPLACE THE LINE BELOW:
+                
+                # 3. Analyze the candles
                 signal = analyze_candles(candles, trend_4h=None)
+                
                 if signal and should_send_signal(symbol, tf_label, signal):
                     msg = format_signal_message(symbol, tf_label, "Forex", signal)
                     send_to_telegram(msg)
