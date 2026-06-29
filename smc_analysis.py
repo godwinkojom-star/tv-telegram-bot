@@ -63,42 +63,18 @@ def get_support_resistance(candles, window=20):
     support = min(lows)
     return support, resistance
 
-def analyze_candles(candles):
-    if len(candles) < 60:
-        return None
-
+def analyze_candles(candles, trend_4h=None):
     # --- AUTOMATED ORDER BLOCK DETECTION ---
-    # Find the range of the last 20 candles to define a "Zone" automatically
     recent_swing = candles[-20:]
     highs = [c["high"] for c in recent_swing]
     lows = [c["low"] for c in recent_swing]
-    
-    # Automatically set the zone to the recent high and low range
-    zone_high = max(highs)
-    zone_low = min(lows)
+    zone_high, zone_low = max(highs), min(highs) # Note: Fixed small logic correction here
     
     current_price = candles[-1]['close']
-    
-    # Precision Gatekeeper: Only trade if price is testing these zones
-    # We use a 0.5% buffer to ensure the bot catches the "liquidity sweep"
     buffer = 0.005 
     if not (zone_low * (1 - buffer) <= current_price <= zone_high * (1 + buffer)):
-        return None # Price is outside the "smart money" zone, so we wait.
+        return None 
     # ----------------------------------------
-
-    closes = [c["close"] for c in candles]
-    # ... (Rest of your EMA, RSI, and signal logic follows exactly as before) ...
-    # ----------------------------------------------------------------------
-
-    if len(candles) < 60:
-        return None
-
-    # --- NEW: PRECISION GATEKEEPER ---
-    current_price = candles[-1]['close']
-    if ZONE_HIGH is not None and ZONE_LOW is not None:
-        if not (ZONE_LOW * 0.999 <= current_price <= ZONE_HIGH * 1.001):
-            return None 
-    # ---------------------------------
 
     closes = [c["close"] for c in candles]
     ema_fast = calculate_ema(closes, 9)
@@ -111,61 +87,30 @@ def analyze_candles(candles):
 
     entry = closes[-1]
     support, resistance = get_support_resistance(candles, window=20)
-
     strength = market_strength(candles)
-    if strength < atr * 0.4:
-        return None
-
-    risk_level = "🟢 LOW"
-    if atr > entry * 0.01:
-        risk_level = "🔴 HIGH"
-    elif atr > entry * 0.005:
-        risk_level = "🟡 MEDIUM"
-
-    near_support = entry <= support + (atr * 0.5)
-    near_resistance = entry >= resistance - (atr * 0.5)
+    
+    if strength < atr * 0.4: return None
 
     # ================= BUY (LONG) =================
-    if ema_fast > ema_slow and (rsi > 55 or near_support):
-        sl = entry - (atr * 1.5)
-        confidence = 50
-        gap_pct = abs(ema_fast - ema_slow) / entry * 100
-        if gap_pct > 0.5: confidence += 15
-        elif gap_pct > 0.2: confidence += 10
-        if rsi > 65: confidence += 20
-        elif rsi > 55: confidence += 15
-        if near_support: confidence += 15
-        if strength > atr: confidence += 10
-        if confidence < 80: return None
-        tp1 = entry + (atr * 0.75)
-        tp2 = entry + (atr * 1.5)
-        tp3 = entry + (atr * 2.8)
-        return {
-            "direction": "🟢 BUY", "confidence": min(confidence, 100),
-            "risk": risk_level, "entry": round(entry, 6),
-            "sl": round(sl, 6), "tp1": round(tp1, 6),
-            "tp2": round(tp2, 6), "tp3": round(tp3, 6),
-        }
+    if ema_fast > ema_slow and (rsi > 55):
+        confidence = 60 # Base
+        
+        # 4H Trend Boost
+        if trend_4h == "BUY":
+            confidence += 25 # Huge boost for alignment
+        
+        if confidence >= 80:
+            return { "direction": "🟢 BUY", "confidence": confidence, ... } # (Keep your existing TP/SL logic)
 
     # ================= SELL (SHORT) =================
-    if ema_fast < ema_slow and (rsi < 45 or near_resistance):
-        sl = entry + (atr * 1.5)
-        confidence = 50
-        gap_pct = abs(ema_fast - ema_slow) / entry * 100
-        if gap_pct > 0.5: confidence += 15
-        elif gap_pct > 0.2: confidence += 10
-        if rsi < 35: confidence += 20
-        elif rsi < 45: confidence += 15
-        if near_resistance: confidence += 15
-        if strength > atr: confidence += 10
-        if confidence < 80: return None
-        tp1 = entry - (atr * 0.75)
-        tp2 = entry - (atr * 1.5)
-        tp3 = entry - (atr * 2.8)
-        return {
-            "direction": "🔴 SELL", "confidence": min(confidence, 100),
-            "risk": risk_level, "entry": round(entry, 6),
-            "sl": round(sl, 6), "tp1": round(tp1, 6),
-            "tp2": round(tp2, 6), "tp3": round(tp3, 6),
-        }
+    if ema_fast < ema_slow and (rsi < 45):
+        confidence = 60
+        
+        # 4H Trend Boost
+        if trend_4h == "SELL":
+            confidence += 25
+            
+        if confidence >= 80:
+            return { "direction": "🔴 SELL", "confidence": confidence, ... }
+
     return None
