@@ -1,6 +1,5 @@
 """
 SmartFX Signal Bot - UPGRADED HIGH-SPEED VERSION
-Fast EMA + Sensitive RSI + Dynamic Support/Resistance + ATR + Order Block Filter
 """
 
 def calculate_ema(prices, period):
@@ -68,7 +67,8 @@ def analyze_candles(candles, trend_4h=None):
     recent_swing = candles[-20:]
     highs = [c["high"] for c in recent_swing]
     lows = [c["low"] for c in recent_swing]
-    zone_high, zone_low = max(highs), min(highs) # Note: Fixed small logic correction here
+    zone_high = max(highs)
+    zone_low = min(lows)
     
     current_price = candles[-1]['close']
     buffer = 0.005 
@@ -91,26 +91,47 @@ def analyze_candles(candles, trend_4h=None):
     
     if strength < atr * 0.4: return None
 
+    # Risk level calculation
+    risk_level = "🟢 LOW"
+    if atr > entry * 0.01:
+        risk_level = "🔴 HIGH"
+    elif atr > entry * 0.005:
+        risk_level = "🟡 MEDIUM"
+
     # ================= BUY (LONG) =================
     if ema_fast > ema_slow and (rsi > 55):
-        confidence = 60 # Base
-        
-        # 4H Trend Boost
+        confidence = 60
         if trend_4h == "BUY":
-            confidence += 25 # Huge boost for alignment
+            confidence += 25
         
         if confidence >= 80:
-            return { "direction": "🟢 BUY", "confidence": confidence, ... } # (Keep your existing TP/SL logic)
+            sl = entry - (atr * 1.5)
+            tp1 = entry + (atr * 0.75)
+            tp2 = entry + (atr * 1.5)
+            tp3 = entry + (atr * 2.8)
+            return {
+                "direction": "🟢 BUY", "confidence": min(confidence, 100),
+                "risk": risk_level, "entry": round(entry, 6),
+                "sl": round(sl, 6), "tp1": round(tp1, 6),
+                "tp2": round(tp2, 6), "tp3": round(tp3, 6),
+            }
 
     # ================= SELL (SHORT) =================
     if ema_fast < ema_slow and (rsi < 45):
         confidence = 60
-        
-        # 4H Trend Boost
         if trend_4h == "SELL":
             confidence += 25
             
         if confidence >= 80:
-            return { "direction": "🔴 SELL", "confidence": confidence, ... }
+            sl = entry + (atr * 1.5)
+            tp1 = entry - (atr * 0.75)
+            tp2 = entry - (atr * 1.5)
+            tp3 = entry - (atr * 2.8)
+            return {
+                "direction": "🔴 SELL", "confidence": min(confidence, 100),
+                "risk": risk_level, "entry": round(entry, 6),
+                "sl": round(sl, 6), "tp1": round(tp1, 6),
+                "tp2": round(tp2, 6), "tp3": round(tp3, 6),
+            }
 
     return None
