@@ -187,9 +187,10 @@ def analyze_crypto():
     results = []
     for symbol in CRYPTO_PAIRS:
         for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
-            try:
+                        try:
                 candles = get_binance_candles(symbol, tf_interval, limit=100)
-                signal = analyze_candles(candles)
+                # REPLACE THE LINE BELOW:
+                signal = analyze_candles(candles, trend_4h=None) 
                 if signal and should_send_signal(symbol, tf_label, signal):
                     msg = format_signal_message(symbol, tf_label, "Crypto", signal)
                     send_to_telegram(msg)
@@ -209,12 +210,10 @@ def analyze_forex():
     results = []
     for symbol in FOREX_PAIRS:
         for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
-            try:
-                candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
-                time.sleep(0)
-                if not candles:
+                            if not candles:
                     continue
-                signal = analyze_candles(candles)
+                # REPLACE THE LINE BELOW:
+                signal = analyze_candles(candles, trend_4h=None)
                 if signal and should_send_signal(symbol, tf_label, signal):
                     msg = format_signal_message(symbol, tf_label, "Forex", signal)
                     send_to_telegram(msg)
