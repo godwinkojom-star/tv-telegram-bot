@@ -208,7 +208,7 @@ def analyze_crypto():
 
 @app.route("/analyze/forex", methods=["GET"])
 def analyze_forex():
-    """Analyze all forex pairs across all timeframes, send signals found."""
+    """Analyze all forex pairs across all timeframes with 4H trend filter."""
     if not TWELVE_DATA_API_KEY:
         return jsonify({"status": "error", "detail": "TWELVE_DATA_API_KEY not set"}), 400
 
@@ -216,22 +216,24 @@ def analyze_forex():
     for symbol in FOREX_PAIRS:
         for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
             try:
-                # 1. You must fetch the candles first!
-                candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
+                # 1. Fetch 4H data to determine the "Global Trend"
+                candles_4h = get_twelvedata_candles(symbol, "4h", limit=200)
+                trend = get_trend_direction(candles_4h)
                 
-                # 2. Check if candles were returned
+                # 2. Fetch the 15M/1H data for the actual signal
+                candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
                 if not candles:
                     continue
                 
-                # 3. Analyze the candles
-                signal = analyze_candles(candles, trend_4h=None)
+                # 3. Pass the trend into the analysis
+                signal = analyze_candles(candles, trend_4h=trend)
                 
                 if signal and should_send_signal(symbol, tf_label, signal):
                     msg = format_signal_message(symbol, tf_label, "Forex", signal)
                     send_to_telegram(msg)
                     results.append({"symbol": symbol, "timeframe": tf_label, "signal": signal})
             except Exception as e:
-                logging.error(f"Error analyzing {symbol} {tf_label}: {e}")
+                logging.error(f"Error analyzing forex {symbol} {tf_label}: {e}")
 
     return jsonify({"status": "ok", "signals_sent": len(results)}), 200
 
