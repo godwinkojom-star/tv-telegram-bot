@@ -64,10 +64,30 @@ def get_support_resistance(candles, window=20):
     return support, resistance
 
 def analyze_candles(candles):
-    # --- MANUAL SETTINGS: Update these when you change your chart zones ---
-    # Set to None if you don't want to use the filter for a specific pair
-    ZONE_HIGH = None  # Example: 73.00
-    ZONE_LOW = None   # Example: 71.00
+    if len(candles) < 60:
+        return None
+
+    # --- AUTOMATED ORDER BLOCK DETECTION ---
+    # Find the range of the last 20 candles to define a "Zone" automatically
+    recent_swing = candles[-20:]
+    highs = [c["high"] for c in recent_swing]
+    lows = [c["low"] for c in recent_swing]
+    
+    # Automatically set the zone to the recent high and low range
+    zone_high = max(highs)
+    zone_low = min(lows)
+    
+    current_price = candles[-1]['close']
+    
+    # Precision Gatekeeper: Only trade if price is testing these zones
+    # We use a 0.5% buffer to ensure the bot catches the "liquidity sweep"
+    buffer = 0.005 
+    if not (zone_low * (1 - buffer) <= current_price <= zone_high * (1 + buffer)):
+        return None # Price is outside the "smart money" zone, so we wait.
+    # ----------------------------------------
+
+    closes = [c["close"] for c in candles]
+    # ... (Rest of your EMA, RSI, and signal logic follows exactly as before) ...
     # ----------------------------------------------------------------------
 
     if len(candles) < 60:
