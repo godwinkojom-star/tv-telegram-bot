@@ -187,10 +187,10 @@ def analyze_crypto():
     results = []
     for symbol in CRYPTO_PAIRS:
         for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
-                        try:
+            try:
+                # THESE LINES MUST HAVE THE EXACT SAME INDENTATION
                 candles = get_binance_candles(symbol, tf_interval, limit=100)
-                # REPLACE THE LINE BELOW:
-                signal = analyze_candles(candles, trend_4h=None) 
+                signal = analyze_candles(candles, trend_4h=None)
                 if signal and should_send_signal(symbol, tf_label, signal):
                     msg = format_signal_message(symbol, tf_label, "Crypto", signal)
                     send_to_telegram(msg)
