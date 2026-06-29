@@ -183,21 +183,26 @@ def should_send_signal(symbol, timeframe, signal):
 
 @app.route("/analyze/crypto", methods=["GET"])
 def analyze_crypto():
-    """Analyze all crypto pairs across all timeframes, send signals found."""
     results = []
     for symbol in CRYPTO_PAIRS:
         for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
             try:
-                # THESE LINES MUST HAVE THE EXACT SAME INDENTATION
+                # 1. Fetch 4H data to determine the "Global Trend"
+                candles_4h = get_binance_candles(symbol, "4h", limit=200)
+                trend = get_trend_direction(candles_4h) 
+                
+                # 2. Fetch the 15M/1H data for the actual signal
                 candles = get_binance_candles(symbol, tf_interval, limit=100)
-                signal = analyze_candles(candles, trend_4h=None)
+                
+                # 3. Pass the trend into the analysis
+                signal = analyze_candles(candles, trend_4h=trend)
+                
                 if signal and should_send_signal(symbol, tf_label, signal):
                     msg = format_signal_message(symbol, tf_label, "Crypto", signal)
                     send_to_telegram(msg)
                     results.append({"symbol": symbol, "timeframe": tf_label, "signal": signal})
             except Exception as e:
                 logging.error(f"Error analyzing {symbol} {tf_label}: {e}")
-
     return jsonify({"status": "ok", "signals_sent": len(results)}), 200
 
 
