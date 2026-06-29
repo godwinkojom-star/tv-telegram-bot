@@ -135,3 +135,19 @@ def analyze_candles(candles, trend_4h=None):
             }
 
     return None
+
+
+def get_trend_direction(candles_4h):
+    """Returns 'BUY' if price is above 200 EMA, 'SELL' if below."""
+    if len(candles_4h) < 200:
+        return None  # Need 200 candles for a valid 200 EMA
+    
+    closes = [c["close"] for c in candles_4h]
+    ema_200 = calculate_ema(closes, 200)
+    current_price = closes[-1]
+    
+    if current_price > ema_200:
+        return "BUY"
+    elif current_price < ema_200:
+        return "SELL"
+    return None
