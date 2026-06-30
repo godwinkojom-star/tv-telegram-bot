@@ -8,6 +8,11 @@ from smc_analysis import analyze_candles
 
 app = Flask(__name__)
 
+# --- CONFIGURATION ---
+TELEGRAM_TOKEN = "YOUR_BOT_TOKEN"
+PUBLIC_CHAT_ID = "YOUR_CHANNEL_OR_GROUP_ID" # Your existing ID
+PRIVATE_USER_ID = "8662582348"              # Your new ID
+
 # --- TELEGRAM CONFIG ---
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "PUT_YOUR_CHAT_ID_HERE")
@@ -159,12 +164,15 @@ def format_signal_message(symbol, timeframe, market, signal):
     
 
 
-def send_to_telegram(message: str):
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML"
-    }
+# 1. Sends to your PUBLIC Channel (The "Signal" flow)
+def send_to_channel(text):
+    payload = {"chat_id": PUBLIC_CHAT_ID, "text": text, "parse_mode": "HTML"}
+    response = requests.post(TELEGRAM_API_URL, json=payload, timeout=10)
+    response.raise_for_status()
+
+# 2. Sends to your PRIVATE Command Center (The "Log" flow)
+def send_to_private(text):
+    payload = {"chat_id": PRIVATE_USER_ID, "text": text, "parse_mode": "HTML"}
     response = requests.post(TELEGRAM_API_URL, json=payload, timeout=10)
     response.raise_for_status()
 
@@ -263,6 +271,13 @@ def daily_summary():
         crypto_ok = True
     except Exception as e:
         logging.error(f"Daily summary crypto check failed for {crypto_test_symbol}: {e}")
+
+    @app.route("/system-heartbeat", methods=["GET"])
+def system_heartbeat():
+    """Sends a quick system check to your private chat."""
+    msg = "🤖 <b>System Heartbeat:</b> All services operational. Monitoring markets."
+    send_to_private(msg)
+    return jsonify({"status": "ok"}), 200
 
     forex_ok = False
     forex_status = "not configured"
