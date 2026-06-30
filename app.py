@@ -15,14 +15,18 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
+
+# --- ANALYTICS ENGINE (Phase 7) ---
+STATS = {"signals_sent": 0, "crypto_signals": 0, "forex_signals": 0}
 LAST_SIGNALS = {}
 
+# --- WATCHLISTS ---
 CRYPTO_PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 FOREX_PAIRS = ["EUR/USD", "GBP/USD", "XAU/USD"]
 CRYPTO_TIMEFRAMES = {"15M": "15m", "1H": "1h"}
 FOREX_TIMEFRAMES = {"15M": "15min", "1H": "1h"}
 
-# --- NEW SENDING FUNCTIONS ---
+# --- SENDING FUNCTIONS ---
 def send_to_channel(text):
     payload = {"chat_id": PUBLIC_CHAT_ID, "text": text, "parse_mode": "HTML"}
     requests.post(TELEGRAM_API_URL, json=payload, timeout=10)
@@ -38,17 +42,17 @@ def home():
 
 @app.route("/test-telegram", methods=["GET"])
 def test_telegram():
-    send_to_private("✅ Test message: Private Command Center is working!")
+    send_to_private("✅ Private Command Center is active!")
     return jsonify({"status": "ok"}), 200
 
 @app.route("/system-heartbeat", methods=["GET"])
 def system_heartbeat():
-    send_to_private("🤖 <b>System Heartbeat:</b> All systems operational.")
+    send_to_private("🤖 <b>System Heartbeat:</b> Operational.")
     return jsonify({"status": "ok"}), 200
 
 @app.route("/analyze/crypto", methods=["GET"])
 def analyze_crypto():
-    results = []
+    results = 0
     for symbol in CRYPTO_PAIRS:
         for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
             try:
@@ -58,14 +62,16 @@ def analyze_crypto():
                 signal = analyze_candles(candles, trend_4h=trend)
                 if signal and should_send_signal(symbol, tf_label, signal):
                     send_to_channel(format_signal_message(symbol, tf_label, "Crypto", signal))
-                    results.append({"symbol": symbol})
+                    STATS["signals_sent"] += 1
+                    STATS["crypto_signals"] += 1
+                    results += 1
             except Exception as e:
                 logging.error(f"Error: {e}")
-    return jsonify({"status": "ok", "signals_sent": len(results)}), 200
+    return jsonify({"status": "ok", "signals_sent": results}), 200
 
 @app.route("/analyze/forex", methods=["GET"])
 def analyze_forex():
-    results = []
+    results = 0
     for symbol in FOREX_PAIRS:
         for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
             try:
@@ -76,17 +82,26 @@ def analyze_forex():
                 signal = analyze_candles(candles, trend_4h=trend)
                 if signal and should_send_signal(symbol, tf_label, signal):
                     send_to_channel(format_signal_message(symbol, tf_label, "Forex", signal))
-                    results.append({"symbol": symbol})
+                    STATS["signals_sent"] += 1
+                    STATS["forex_signals"] += 1
+                    results += 1
             except Exception as e:
                 logging.error(f"Error: {e}")
-    return jsonify({"status": "ok", "signals_sent": len(results)}), 200
+    return jsonify({"status": "ok", "signals_sent": results}), 200
 
 @app.route("/daily-summary", methods=["GET"])
 def daily_summary():
-    send_to_private("📊 <b>Daily Bot Status:</b> All systems operational.")
-    return jsonify({"status": "ok"}), 200
+    msg = (
+        f"📊 <b>Daily Performance Report</b>\n\n"
+        f"🚀 Total Signals Sent: {STATS['signals_sent']}\n"
+        f"🪙 Crypto Signals: {STATS['crypto_signals']}\n"
+        f"💱 Forex Signals: {STATS['forex_signals']}\n\n"
+        f"<i>Bot status: Fully Operational.</i>"
+    )
+    send_to_private(msg)
+    return jsonify({"status": "ok", "stats": STATS}), 200
 
-# --- HELPER FUNCTIONS (KEEPING THESE) ---
+# --- HELPER FUNCTIONS ---
 def get_binance_candles(symbol, interval, limit=100):
     url = "https://data-api.binance.vision/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
@@ -105,10 +120,7 @@ def get_twelvedata_candles(symbol, interval, limit=100):
     return [{"open": float(c["open"]), "high": float(c["high"]), "low": float(c["low"]), "close": float(c["close"])} for c in values]
 
 def format_signal_message(symbol, timeframe, market, signal):
-    # This keeps your original signal format
-    direction = signal.get("direction", "")
-    msg = f"🚀 <b>Signal for {symbol}</b>\nDirection: {direction}"
-    return msg
+    return f"🚀 <b>Signal: {symbol}</b>\nTimeframe: {timeframe}\nMarket: {market}\nDirection: {signal.get('direction')}"
 
 def should_send_signal(symbol, timeframe, signal):
     key = f"{symbol}_{timeframe}"
@@ -117,5 +129,4 @@ def should_send_signal(symbol, timeframe, signal):
     return True
 
 def get_trend_direction(candles):
-    # This is your existing trend helper
     return "UP" if candles[-1]['close'] > candles[0]['close'] else "DOWN"
