@@ -1,8 +1,8 @@
 import os
 import logging
+import threading
 from flask import Flask, jsonify
 import requests
-import threading
 from smc_analysis import analyze_candles
 
 app = Flask(__name__)
@@ -15,12 +15,14 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
-STATS = {"signals_sent": 0, "crypto_signals": 0, "forex_signals": 0}
+STATS = {"signals_sent": 0, "crypto_signals": 0, "forex_signals": 0, "wins": 0, "losses": 0}
 LAST_SIGNALS = {}
+ACTIVE_TRADES = []
 
 CRYPTO_PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 FOREX_PAIRS = ["EUR/USD", "GBP/USD", "XAU/USD"]
 CRYPTO_TIMEFRAMES = {"15M": "15m", "1H": "1h"}
+FOREX_TIMEFRAMES = {"15M": "15min", "1H": "1h"}
 
 # --- INDICATORS & HELPERS ---
 def calculate_ema(closes, period=20):
@@ -39,27 +41,42 @@ def send_to_channel(text):
 def send_to_private(text):
     requests.post(TELEGRAM_API_URL, json={"chat_id": PRIVATE_USER_ID, "text": text, "parse_mode": "HTML"}, timeout=10)
 
+def format_signal_message(symbol, timeframe, market, signal):
+    return f"🚀 <b>Signal: {symbol}</b>\nTimeframe: {timeframe}\nMarket: {market}\nDirection: {signal.get('direction')}"
+
 def should_send_signal(symbol, timeframe, signal):
     key = f"{symbol}_{timeframe}"
     if LAST_SIGNALS.get(key) == signal["direction"]: return False
     LAST_SIGNALS[key] = signal["direction"]
     return True
 
-# --- BACKGROUND WORKER (Fixes Timeout) ---
-def run_analysis_task(target_function):
-    target_function()
+# --- TRADE MONITORING ---
+@app.route("/monitor-trades", methods=["GET"])
+def monitor_trades():
+    global ACTIVE_TRADES
+    for trade in ACTIVE_TRADES[:]:
+        current_price = get_live_price(trade['symbol'])
+        if current_price >= trade['tp']:
+            send_to_channel(f"✅ <b>TP Hit: {trade['symbol']}</b>. Profit secured!")
+            STATS["wins"] += 1; ACTIVE_TRADES.remove(trade)
+        elif current_price <= trade['sl']:
+            send_to_channel(f"❌ <b>SL Hit: {trade['symbol']}</b>. Loss recorded.")
+            STATS["losses"] += 1; ACTIVE_TRADES.remove(trade)
+    return jsonify({"status": "monitoring", "active_count": len(ACTIVE_TRADES)})
 
-# --- ROUTES ---
+def get_live_price(symbol):
+    try: return float(requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.replace('/', '')}", timeout=5).json()['price'])
+    except: return 0
+
+# --- ANALYSIS ROUTES ---
 @app.route("/analyze/crypto", methods=["GET"])
 def analyze_crypto():
-    # Start in background to prevent timeout
-    threading.Thread(target=run_analysis_task, args=(perform_crypto_analysis,)).start()
+    threading.Thread(target=perform_crypto_analysis).start()
     return jsonify({"status": "accepted"}), 202
 
 @app.route("/analyze/forex", methods=["GET"])
 def analyze_forex():
-    # Start in background to prevent timeout
-    threading.Thread(target=run_analysis_task, args=(perform_forex_analysis,)).start()
+    threading.Thread(target=perform_forex_analysis).start()
     return jsonify({"status": "accepted"}), 202
 
 def perform_crypto_analysis():
@@ -71,22 +88,29 @@ def perform_crypto_analysis():
                 ema, macd = calculate_ema(closes), calculate_macd(closes)
                 signal = analyze_candles(candles, trend_4h=get_trend_direction(get_binance_candles(symbol, "4h", limit=200)))
                 if signal and closes[-1] > ema and macd > 0 and should_send_signal(symbol, tf_label, signal):
-                    send_to_channel(f"🚀 <b>Crypto: {symbol}</b>\nTrend: Bullish | MACD: {macd:.4f}\nDirection: {signal.get('direction')}")
+                    entry = closes[-1]
+                    tp, sl = entry * 1.01, entry * 0.995
+                    ACTIVE_TRADES.append({'symbol': symbol, 'entry': entry, 'tp': tp, 'sl': sl})
+                    send_to_channel(f"{format_signal_message(symbol, tf_label, 'Crypto', signal)}\nEMA Trend: Bullish | MACD: {macd:.4f}")
                     STATS["signals_sent"] += 1; STATS["crypto_signals"] += 1
             except Exception as e: logging.error(e)
 
 def perform_forex_analysis():
     for symbol in FOREX_PAIRS:
-        try:
-            candles = get_twelvedata_candles(symbol, "1h", limit=100)
-            if not candles: continue
-            closes = [c['close'] for c in candles]
-            ema, macd = calculate_ema(closes), calculate_macd(closes)
-            signal = analyze_candles(candles, trend_4h=get_trend_direction(get_twelvedata_candles(symbol, "4h", limit=200)))
-            if signal and closes[-1] > ema and macd > 0 and should_send_signal(symbol, "1H", signal):
-                send_to_channel(f"🚀 <b>Forex: {symbol}</b>\nTrend: Bullish | MACD: {macd:.4f}\nDirection: {signal.get('direction')}")
-                STATS["signals_sent"] += 1; STATS["forex_signals"] += 1
-        except Exception as e: logging.error(e)
+        for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
+            try:
+                candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
+                if not candles: continue
+                closes = [c['close'] for c in candles]
+                ema, macd = calculate_ema(closes), calculate_macd(closes)
+                signal = analyze_candles(candles, trend_4h=get_trend_direction(get_twelvedata_candles(symbol, "4h", limit=200)))
+                if signal and closes[-1] > ema and macd > 0 and should_send_signal(symbol, tf_label, signal):
+                    entry = closes[-1]
+                    tp, sl = entry * 1.005, entry * 0.995
+                    ACTIVE_TRADES.append({'symbol': symbol, 'entry': entry, 'tp': tp, 'sl': sl})
+                    send_to_channel(f"{format_signal_message(symbol, tf_label, 'Forex', signal)}\nEMA Trend: Bullish | MACD: {macd:.4f}")
+                    STATS["signals_sent"] += 1; STATS["forex_signals"] += 1
+            except Exception as e: logging.error(e)
 
 # --- DATA HELPERS ---
 def get_binance_candles(symbol, interval, limit=100):
@@ -103,7 +127,8 @@ def get_trend_direction(candles):
 
 @app.route("/daily-summary", methods=["GET"])
 def daily_summary():
-    send_to_private(f"📊 <b>Daily Report:</b> {STATS['signals_sent']} signals sent.")
+    msg = f"📊 <b>Performance Report</b>\nSignals: {STATS['signals_sent']}\nWins: {STATS['wins']}\nLosses: {STATS['losses']}"
+    send_to_private(msg)
     return jsonify({"status": "ok", "stats": STATS})
 
 if __name__ == "__main__":
