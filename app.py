@@ -3,6 +3,7 @@ import logging
 import threading
 from flask import Flask, jsonify
 import requests
+from datetime import datetime
 from smc_analysis import analyze_candles
 
 app = Flask(__name__)
@@ -24,7 +25,12 @@ FOREX_PAIRS = ["EUR/USD", "GBP/USD", "XAU/USD"]
 CRYPTO_TIMEFRAMES = {"15M": "15m", "1H": "1h"}
 FOREX_TIMEFRAMES = {"15M": "15min", "1H": "1h"}
 
-# --- INDICATORS & HELPERS ---
+# --- HELPERS ---
+def is_market_active():
+    """Only trade during London (07:00-16:00) or NY (12:00-21:00) UTC."""
+    h = datetime.utcnow().hour
+    return (7 <= h < 16) or (12 <= h < 21)
+
 def calculate_ema(closes, period=20):
     ema = closes[0]
     multiplier = 2 / (period + 1)
@@ -40,9 +46,6 @@ def send_to_channel(text):
 
 def send_to_private(text):
     requests.post(TELEGRAM_API_URL, json={"chat_id": PRIVATE_USER_ID, "text": text, "parse_mode": "HTML"}, timeout=10)
-
-def format_signal_message(symbol, timeframe, market, signal):
-    return f"🚀 <b>Signal: {symbol}</b>\nTimeframe: {timeframe}\nMarket: {market}\nDirection: {signal.get('direction')}"
 
 def should_send_signal(symbol, timeframe, signal):
     key = f"{symbol}_{timeframe}"
@@ -60,7 +63,7 @@ def monitor_trades():
             send_to_channel(f"✅ <b>TP Hit: {trade['symbol']}</b>. Profit secured!")
             STATS["wins"] += 1; ACTIVE_TRADES.remove(trade)
         elif current_price <= trade['sl']:
-            send_to_channel(f"❌ <b>SL Hit: {trade['symbol']}</b>. Loss recorded.")
+            send_to_channel(f"❌ <b>SL Hit: {trade['symbol']}</b>. Loss recorded!")
             STATS["losses"] += 1; ACTIVE_TRADES.remove(trade)
     return jsonify({"status": "monitoring", "active_count": len(ACTIVE_TRADES)})
 
@@ -68,18 +71,9 @@ def get_live_price(symbol):
     try: return float(requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.replace('/', '')}", timeout=5).json()['price'])
     except: return 0
 
-# --- ANALYSIS ROUTES ---
-@app.route("/analyze/crypto", methods=["GET"])
-def analyze_crypto():
-    threading.Thread(target=perform_crypto_analysis).start()
-    return jsonify({"status": "accepted"}), 202
-
-@app.route("/analyze/forex", methods=["GET"])
-def analyze_forex():
-    threading.Thread(target=perform_forex_analysis).start()
-    return jsonify({"status": "accepted"}), 202
-
+# --- ANALYSIS TASKS ---
 def perform_crypto_analysis():
+    if not is_market_active(): return
     for symbol in CRYPTO_PAIRS:
         for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
             try:
@@ -91,11 +85,12 @@ def perform_crypto_analysis():
                     entry = closes[-1]
                     tp, sl = entry * 1.01, entry * 0.995
                     ACTIVE_TRADES.append({'symbol': symbol, 'entry': entry, 'tp': tp, 'sl': sl})
-                    send_to_channel(f"{format_signal_message(symbol, tf_label, 'Crypto', signal)}\nEMA Trend: Bullish | MACD: {macd:.4f}")
+                    send_to_channel(f"🚀 <b>Crypto: {symbol}</b> ({tf_label})\nDirection: {signal['direction']}\nTP: {tp:.2f} | SL: {sl:.2f}")
                     STATS["signals_sent"] += 1; STATS["crypto_signals"] += 1
             except Exception as e: logging.error(e)
 
 def perform_forex_analysis():
+    if not is_market_active(): return
     for symbol in FOREX_PAIRS:
         for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
             try:
@@ -108,9 +103,26 @@ def perform_forex_analysis():
                     entry = closes[-1]
                     tp, sl = entry * 1.005, entry * 0.995
                     ACTIVE_TRADES.append({'symbol': symbol, 'entry': entry, 'tp': tp, 'sl': sl})
-                    send_to_channel(f"{format_signal_message(symbol, tf_label, 'Forex', signal)}\nEMA Trend: Bullish | MACD: {macd:.4f}")
+                    send_to_channel(f"🚀 <b>Forex: {symbol}</b> ({tf_label})\nDirection: {signal['direction']}\nTP: {tp:.4f} | SL: {sl:.4f}")
                     STATS["signals_sent"] += 1; STATS["forex_signals"] += 1
             except Exception as e: logging.error(e)
+
+# --- ROUTES ---
+@app.route("/analyze/crypto", methods=["GET"])
+def analyze_crypto():
+    threading.Thread(target=perform_crypto_analysis).start()
+    return jsonify({"status": "accepted"}), 202
+
+@app.route("/analyze/forex", methods=["GET"])
+def analyze_forex():
+    threading.Thread(target=perform_forex_analysis).start()
+    return jsonify({"status": "accepted"}), 202
+
+@app.route("/daily-summary", methods=["GET"])
+def daily_summary():
+    msg = f"📊 <b>Performance Report</b>\nSignals: {STATS['signals_sent']}\nWins: {STATS['wins']}\nLosses: {STATS['losses']}"
+    send_to_private(msg)
+    return jsonify({"status": "ok", "stats": STATS})
 
 # --- DATA HELPERS ---
 def get_binance_candles(symbol, interval, limit=100):
@@ -124,12 +136,6 @@ def get_twelvedata_candles(symbol, interval, limit=100):
 
 def get_trend_direction(candles):
     return "UP" if candles[-1]['close'] > candles[0]['close'] else "DOWN"
-
-@app.route("/daily-summary", methods=["GET"])
-def daily_summary():
-    msg = f"📊 <b>Performance Report</b>\nSignals: {STATS['signals_sent']}\nWins: {STATS['wins']}\nLosses: {STATS['losses']}"
-    send_to_private(msg)
-    return jsonify({"status": "ok", "stats": STATS})
 
 if __name__ == "__main__":
     app.run()
