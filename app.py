@@ -159,8 +159,9 @@ def get_twelvedata_candles(symbol, interval, limit=100):
     data = resp.json()
     return [{"close": float(c["close"])} for c in reversed(data.get("values", []))]
 
-def get_trend_direction(candles):
-    return "UP" if candles[-1]['close'] > candles[0]['close'] else "DOWN"
+def get_trend_direction(candles_4h):
+    # This now matches the "BUY"/"SELL" output from smc_analysis.py
+    return "BUY" if candles_4h[-1]['close'] > candles_4h[0]['close'] else "SELL"
 
 if __name__ == "__main__":
     app.run()
