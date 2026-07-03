@@ -151,55 +151,56 @@ def run_analysis(symbols, timeframes, market_type):
     for symbol in symbols:
         for tf_label, tf in timeframes.items():
             try:
-                candles = get_binance_candles(symbol, tf) if market_type == "crypto" else get_twelvedata_candles(symbol, tf)
+    candles = get_binance_candles(symbol, tf) if market_type == "crypto" else get_twelvedata_candles(symbol, tf)
 
-                if len(candles) < 50:
-                    continue
+    if len(candles) < 50:
+        continue
 
-                closes = [c["close"] for c in candles]
-trend_4h = get_trend_direction(candles)
+    closes = [c["close"] for c in candles]
 
-signal = analyze_candles(candles, trend_4h=trend_4h)
+    trend_4h = get_trend_direction(candles)
 
-print(symbol, tf_label, signal)  # DEBUG LINE
+    signal = analyze_candles(candles, trend_4h=trend_4h)
 
-if not signal:
-    continue
+    print(symbol, tf_label, signal)  # DEBUG LINE
 
-if should_send_signal(symbol, tf_label, signal):
+    if not signal:
+        continue
 
-                    direction = signal["direction"]
-                    entry = signal["entry"]
+    if should_send_signal(symbol, tf_label, signal):
 
-                    trade = {
-                        "symbol": symbol,
-                        "direction": "BUY" if "BUY" in direction else "SELL",
-                        "entry": entry,
-                        "tp": signal["tp3"],
-                        "sl": signal["sl"]
-                    }
+        direction = signal["direction"]
+        entry = signal["entry"]
 
-                    ACTIVE_TRADES.append(trade)
+        trade = {
+            "symbol": symbol,
+            "direction": "BUY" if "BUY" in direction else "SELL",
+            "entry": entry,
+            "tp": signal["tp3"],
+            "sl": signal["sl"]
+        }
 
-                    send_to_channel(
-                        f"🚀 <b>{market_type.upper()}: {symbol}</b> ({tf_label})\n"
-                        f"{direction}\n"
-                        f"Entry: {entry}\n"
-                        f"TP: {signal['tp1']} | {signal['tp2']} | {signal['tp3']}\n"
-                        f"SL: {signal['sl']}\n"
-                        f"Confidence: {signal['confidence']}%\n"
-                        f"Risk: {signal['risk']}"
-                    )
+        ACTIVE_TRADES.append(trade)
 
-                    STATS["signals_sent"] += 1
+        send_to_channel(
+            f"🚀 <b>{market_type.upper()}: {symbol}</b> ({tf_label})\n"
+            f"{direction}\n"
+            f"Entry: {entry}\n"
+            f"TP: {signal['tp1']} | {signal['tp2']} | {signal['tp3']}\n"
+            f"SL: {signal['sl']}\n"
+            f"Confidence: {signal['confidence']}%\n"
+            f"Risk: {signal['risk']}"
+        )
 
-                    if market_type == "crypto":
-                        STATS["crypto_signals"] += 1
-                    else:
-                        STATS["forex_signals"] += 1
+        STATS["signals_sent"] += 1
 
-            except Exception as e:
-                logging.error(f"{symbol} error: {e}")
+        if market_type == "crypto":
+            STATS["crypto_signals"] += 1
+        else:
+            STATS["forex_signals"] += 1
+
+except Exception as e:
+    logging.error(f"{symbol} error: {e}")
 
 
 def perform_crypto_analysis():
