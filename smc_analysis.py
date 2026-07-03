@@ -1,14 +1,21 @@
-import math
+"""
+SmartFX Signal Bot V2 - SMC Analysis Engine
+Clean, fast, and trend-following signal system
+"""
+
+from typing import List, Dict, Optional
 
 
-# ---------------- INDICATORS ----------------
+# =========================
+# 📊 BASIC INDICATORS
+# =========================
 
-def calculate_ema(prices, period):
+def calculate_ema(prices: List[float], period: int) -> Optional[float]:
     if len(prices) < period:
         return None
 
-    multiplier = 2 / (period + 1)
     ema = sum(prices[:period]) / period
+    multiplier = 2 / (period + 1)
 
     for price in prices[period:]:
         ema = (price - ema) * multiplier + ema
@@ -16,7 +23,7 @@ def calculate_ema(prices, period):
     return ema
 
 
-def calculate_rsi(closes, period=9):
+def calculate_rsi(closes: List[float], period: int = 14) -> Optional[float]:
     if len(closes) < period + 1:
         return None
 
@@ -42,42 +49,75 @@ def calculate_rsi(closes, period=9):
     return 100 - (100 / (1 + rs))
 
 
-def calculate_atr(candles, period=14):
+def calculate_atr(candles: List[Dict], period: int = 14) -> Optional[float]:
     if len(candles) < period + 1:
         return None
 
-    tr_values = []
+    trs = []
 
     for i in range(1, len(candles)):
         high = candles[i]["high"]
         low = candles[i]["low"]
         prev_close = candles[i - 1]["close"]
 
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
-        tr_values.append(tr)
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
 
-    return sum(tr_values[-period:]) / period
+    return sum(trs[-period:]) / period
 
 
-def market_strength(candles):
-    closes = [c["close"] for c in candles[-20:]]
+# =========================
+# 📉 MARKET STRUCTURE
+# =========================
 
-    moves = []
-    for i in range(1, len(closes)):
-        moves.append(abs(closes[i] - closes[i - 1]))
+def get_support_resistance(candles: List[Dict], window: int = 20):
+    recent = candles[-window:]
+    highs = [c["high"] for c in recent]
+    lows = [c["low"] for c in recent]
 
-    return sum(moves) / len(moves) if moves else 0
+    return min(lows), max(highs)
 
 
-# ---------------- MAIN STRATEGY ----------------
+def detect_swing_points(candles: List[Dict], lookback: int = 3):
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
 
-def analyze_candles(candles, trend_4h=None):
+    swing_high = max(highs[-lookback * 5:])
+    swing_low = min(lows[-lookback * 5:])
 
-    if len(candles) < 30:
+    return swing_high, swing_low
+
+
+# =========================
+# 🧠 TREND FILTER (4H)
+# =========================
+
+def get_trend_direction(candles_4h: List[Dict]) -> Optional[str]:
+    """
+    Returns:
+    - 'BUY'  → bullish trend
+    - 'SELL' → bearish trend
+    """
+
+    if len(candles_4h) < 200:
+        return None
+
+    closes = [c["close"] for c in candles_4h]
+    ema_200 = calculate_ema(closes, 200)
+
+    if not ema_200:
+        return None
+
+    return "BUY" if closes[-1] > ema_200 else "SELL"
+
+
+# =========================
+# 📡 MAIN ANALYSIS ENGINE
+# =========================
+
+def analyze_candles(candles: List[Dict], trend_4h: str = None):
+
+    if len(candles) < 50:
         return None
 
     closes = [c["close"] for c in candles]
@@ -92,63 +132,74 @@ def analyze_candles(candles, trend_4h=None):
 
     entry = closes[-1]
 
-    strength = market_strength(candles)
+    support, resistance = get_support_resistance(candles)
+    swing_high, swing_low = detect_swing_points(candles)
 
-    # 🔥 relaxed filter so signals actually appear
-    if strength < atr * 0.2:
+    # =========================
+    # 📊 TREND ALIGNMENT RULE
+    # =========================
+
+    if trend_4h is None:
         return None
 
-    # ---------------- BUY ----------------
-    if ema_fast > ema_slow and rsi > 50:
+    # ONLY BUY in bullish trend
+    if trend_4h == "BUY":
+        if not (ema_fast > ema_slow and rsi > 50):
+            return None
 
-        confidence = 60
-        if trend_4h == "BUY":
-            confidence += 25
+        direction = "🟢 BUY"
 
-        if confidence >= 65:
-            return {
-                "direction": "🟢 BUY",
-                "confidence": confidence,
-                "entry": entry,
-                "sl": entry - atr,
-                "tp1": entry + atr * 0.8,
-                "tp2": entry + atr * 1.5,
-                "tp3": entry + atr * 2.5,
-                "risk": "MEDIUM"
-            }
+        sl = entry - (atr * 1.5)
+        tp1 = entry + (atr * 1.0)
+        tp2 = entry + (atr * 2.0)
+        tp3 = entry + (atr * 3.0)
 
-    # ---------------- SELL ----------------
-    if ema_fast < ema_slow and rsi < 50:
+    # ONLY SELL in bearish trend
+    elif trend_4h == "SELL":
+        if not (ema_fast < ema_slow and rsi < 50):
+            return None
 
-        confidence = 60
-        if trend_4h == "SELL":
-            confidence += 25
+        direction = "🔴 SELL"
 
-        if confidence >= 65:
-            return {
-                "direction": "🔴 SELL",
-                "confidence": confidence,
-                "entry": entry,
-                "sl": entry + atr,
-                "tp1": entry - atr * 0.8,
-                "tp2": entry - atr * 1.5,
-                "tp3": entry - atr * 2.5,
-                "risk": "MEDIUM"
-            }
+        sl = entry + (atr * 1.5)
+        tp1 = entry - (atr * 1.0)
+        tp2 = entry - (atr * 2.0)
+        tp3 = entry - (atr * 3.0)
 
-    return None
-
-
-# ---------------- TREND FILTER ----------------
-
-def get_trend_direction(candles_4h):
-    if len(candles_4h) < 50:
+    else:
         return None
 
-    closes = [c["close"] for c in candles_4h]
+    # =========================
+    # 🎯 CONFIDENCE SCORE
+    # =========================
 
-    ema_200 = calculate_ema(closes, 200)
-    if not ema_200:
+    confidence = 60
+
+    if abs(ema_fast - ema_slow) > atr * 0.2:
+        confidence += 10
+
+    if (trend_4h == "BUY" and rsi > 55) or (trend_4h == "SELL" and rsi < 45):
+        confidence += 15
+
+    if entry > support and entry < resistance:
+        confidence += 10
+
+    confidence = min(confidence, 100)
+
+    if confidence < 75:
         return None
 
-    return "BUY" if closes[-1] > ema_200 else "SELL"
+    # =========================
+    # 📤 FINAL SIGNAL OUTPUT
+    # =========================
+
+    return {
+        "direction": direction,
+        "entry": round(entry, 5),
+        "sl": round(sl, 5),
+        "tp1": round(tp1, 5),
+        "tp2": round(tp2, 5),
+        "tp3": round(tp3, 5),
+        "confidence": confidence,
+        "risk": "Low" if atr < entry * 0.01 else "Medium"
+    }
