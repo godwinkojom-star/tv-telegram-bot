@@ -76,26 +76,19 @@ def perform_crypto_analysis():
     if datetime.utcnow().minute == 0:
         send_to_private("🤖 Crypto Scanner: Healthy and active...")
         
-    if not is_market_active(): return 
-    # ... rest of your existing code
-
-# --- ANALYSIS TASKS ---
-def perform_crypto_analysis():
     if not is_market_active(): return
+    
     for symbol in CRYPTO_PAIRS:
         for tf_label, tf_interval in CRYPTO_TIMEFRAMES.items():
             try:
                 candles = get_binance_candles(symbol, tf_interval, limit=100)
                 closes = [c['close'] for c in candles]
-                # Pass the 4H trend into your analysis
                 trend_4h = get_trend_direction(get_binance_candles(symbol, "4h", limit=200))
                 signal = analyze_candles(candles, trend_4h=trend_4h)
                 
-                # Check if signal is not None and matches trend
                 if signal and signal['signal']:
                     if should_send_signal(symbol, tf_label, signal):
                         entry = closes[-1]
-                        # Set TP/SL dynamically based on direction
                         if signal['signal'] == "BUY":
                             tp, sl = entry * 1.01, entry * 0.995
                         else:
@@ -113,17 +106,13 @@ def perform_forex_analysis():
         send_to_private("🤖 Forex Scanner: Healthy and active...")
         
     if not is_market_active(): return
-    # ... rest of your existing code
-
-def perform_forex_analysis():
-    if not is_market_active(): return
+    
     for symbol in FOREX_PAIRS:
         for tf_label, tf_interval in FOREX_TIMEFRAMES.items():
             try:
                 candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
                 if not candles: continue
                 closes = [c['close'] for c in candles]
-                # Pass the 4H trend
                 trend_4h = get_trend_direction(get_twelvedata_candles(symbol, "4h", limit=200))
                 signal = analyze_candles(candles, trend_4h=trend_4h)
                 
