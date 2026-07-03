@@ -79,15 +79,25 @@ def perform_crypto_analysis():
             try:
                 candles = get_binance_candles(symbol, tf_interval, limit=100)
                 closes = [c['close'] for c in candles]
-                ema, macd = calculate_ema(closes), calculate_macd(closes)
-                signal = analyze_candles(candles, trend_4h=get_trend_direction(get_binance_candles(symbol, "4h", limit=200)))
-                if signal and closes[-1] > ema and macd > 0 and should_send_signal(symbol, tf_label, signal):
-                    entry = closes[-1]
-                    tp, sl = entry * 1.01, entry * 0.995
-                    ACTIVE_TRADES.append({'symbol': symbol, 'entry': entry, 'tp': tp, 'sl': sl})
-                    send_to_channel(f"🚀 <b>Crypto: {symbol}</b> ({tf_label})\nDirection: {signal['direction']}\nTP: {tp:.2f} | SL: {sl:.2f}")
-                    STATS["signals_sent"] += 1; STATS["crypto_signals"] += 1
+                # Pass the 4H trend into your analysis
+                trend_4h = get_trend_direction(get_binance_candles(symbol, "4h", limit=200))
+                signal = analyze_candles(candles, trend_4h=trend_4h)
+                
+                # Check if signal is not None and matches trend
+                if signal and signal['signal']:
+                    if should_send_signal(symbol, tf_label, signal):
+                        entry = closes[-1]
+                        # Set TP/SL dynamically based on direction
+                        if signal['signal'] == "BUY":
+                            tp, sl = entry * 1.01, entry * 0.995
+                        else:
+                            tp, sl = entry * 0.99, entry * 1.005
+                            
+                        ACTIVE_TRADES.append({'symbol': symbol, 'entry': entry, 'tp': tp, 'sl': sl})
+                        send_to_channel(f"🚀 <b>Crypto: {symbol}</b> ({tf_label})\nDirection: {signal['signal']}\nTP: {tp:.2f} | SL: {sl:.2f}")
+                        STATS["signals_sent"] += 1; STATS["crypto_signals"] += 1
             except Exception as e: logging.error(e)
+
 
 def perform_forex_analysis():
     if not is_market_active(): return
@@ -97,14 +107,21 @@ def perform_forex_analysis():
                 candles = get_twelvedata_candles(symbol, tf_interval, limit=100)
                 if not candles: continue
                 closes = [c['close'] for c in candles]
-                ema, macd = calculate_ema(closes), calculate_macd(closes)
-                signal = analyze_candles(candles, trend_4h=get_trend_direction(get_twelvedata_candles(symbol, "4h", limit=200)))
-                if signal and closes[-1] > ema and macd > 0 and should_send_signal(symbol, tf_label, signal):
-                    entry = closes[-1]
-                    tp, sl = entry * 1.005, entry * 0.995
-                    ACTIVE_TRADES.append({'symbol': symbol, 'entry': entry, 'tp': tp, 'sl': sl})
-                    send_to_channel(f"🚀 <b>Forex: {symbol}</b> ({tf_label})\nDirection: {signal['direction']}\nTP: {tp:.4f} | SL: {sl:.4f}")
-                    STATS["signals_sent"] += 1; STATS["forex_signals"] += 1
+                # Pass the 4H trend
+                trend_4h = get_trend_direction(get_twelvedata_candles(symbol, "4h", limit=200))
+                signal = analyze_candles(candles, trend_4h=trend_4h)
+                
+                if signal and signal['signal']:
+                    if should_send_signal(symbol, tf_label, signal):
+                        entry = closes[-1]
+                        if signal['signal'] == "BUY":
+                            tp, sl = entry * 1.005, entry * 0.995
+                        else:
+                            tp, sl = entry * 0.995, entry * 1.005
+                            
+                        ACTIVE_TRADES.append({'symbol': symbol, 'entry': entry, 'tp': tp, 'sl': sl})
+                        send_to_channel(f"🚀 <b>Forex: {symbol}</b> ({tf_label})\nDirection: {signal['signal']}\nTP: {tp:.4f} | SL: {sl:.4f}")
+                        STATS["signals_sent"] += 1; STATS["forex_signals"] += 1
             except Exception as e: logging.error(e)
 
 # --- ROUTES ---
