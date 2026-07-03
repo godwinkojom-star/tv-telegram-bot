@@ -71,6 +71,14 @@ def get_live_price(symbol):
     try: return float(requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.replace('/', '')}", timeout=5).json()['price'])
     except: return 0
 
+def perform_crypto_analysis():
+    # Heartbeat
+    if datetime.utcnow().minute == 0:
+        send_to_private("🤖 Crypto Scanner: Healthy and active...")
+        
+    if not is_market_active(): return 
+    # ... rest of your existing code
+
 # --- ANALYSIS TASKS ---
 def perform_crypto_analysis():
     if not is_market_active(): return
@@ -97,7 +105,15 @@ def perform_crypto_analysis():
                         send_to_channel(f"🚀 <b>Crypto: {symbol}</b> ({tf_label})\nDirection: {signal['signal']}\nTP: {tp:.2f} | SL: {sl:.2f}")
                         STATS["signals_sent"] += 1; STATS["crypto_signals"] += 1
             except Exception as e: logging.error(e)
-
+                
+                
+def perform_forex_analysis():
+    # Heartbeat
+    if datetime.utcnow().minute == 0:
+        send_to_private("🤖 Forex Scanner: Healthy and active...")
+        
+    if not is_market_active(): return
+    # ... rest of your existing code
 
 def perform_forex_analysis():
     if not is_market_active(): return
