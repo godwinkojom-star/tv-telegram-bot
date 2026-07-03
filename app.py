@@ -157,14 +157,16 @@ def run_analysis(symbols, timeframes, market_type):
                     continue
 
                 closes = [c["close"] for c in candles]
-                trend_4h = get_trend_direction(candles)
+trend_4h = get_trend_direction(candles)
 
-                signal = analyze_candles(candles, trend_4h=trend_4h)
+signal = analyze_candles(candles, trend_4h=trend_4h)
 
-                if not signal:
-                    continue
+print(symbol, tf_label, signal)  # DEBUG LINE
 
-                if should_send_signal(symbol, tf_label, signal):
+if not signal:
+    continue
+
+if should_send_signal(symbol, tf_label, signal):
 
                     direction = signal["direction"]
                     entry = signal["entry"]
