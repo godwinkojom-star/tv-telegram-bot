@@ -140,6 +140,9 @@ def perform_forex_analysis():
                         STATS["signals_sent"] += 1; STATS["forex_signals"] += 1
             except Exception as e: logging.error(e)
 
+@app.route("/", methods=["GET"])
+def home():
+    return "Bot is active and running!", 200
 # --- ROUTES ---
 @app.route("/analyze/crypto", methods=["GET"])
 def analyze_crypto():
