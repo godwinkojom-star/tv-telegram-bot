@@ -66,13 +66,13 @@ def analyze_candles(candles, trend_4h=None):
     entry = closes[-1]
 
     # ---------------- BUY ----------------
-    if ema_fast > ema_slow and rsi > 55:
+    if ema_fast > ema_slow and rsi > 50:
         confidence = 60
 
         if trend_4h == "BUY":
             confidence += 25
 
-        if confidence >= 80:
+        if confidence >= 65:
             sl = entry - (atr * 1.5)
             tp1 = entry + (atr * 0.75)
             tp2 = entry + (atr * 1.5)
@@ -90,13 +90,13 @@ def analyze_candles(candles, trend_4h=None):
             }
 
     # ---------------- SELL ----------------
-    if ema_fast < ema_slow and rsi < 45:
+    if ema_fast < ema_slow and rsi < 50:
         confidence = 60
 
         if trend_4h == "SELL":
             confidence += 25
 
-        if confidence >= 80:
+        if confidence >= 65:
             sl = entry + (atr * 1.5)
             tp1 = entry - (atr * 0.75)
             tp2 = entry - (atr * 1.5)
