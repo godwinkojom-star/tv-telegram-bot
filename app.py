@@ -105,7 +105,11 @@ def get_twelvedata_candles(symbol, interval, limit=100):
 
 # ---------------- ANALYSIS ENGINE ----------------
 def run_analysis(symbols, timeframes, market_type):
+    print("===== ANALYSIS STARTED =====")
+    print("Market active:", is_market_active())
+
     if not is_market_active():
+        print("MARKET CLOSED")
         return
 
     for symbol in symbols:
