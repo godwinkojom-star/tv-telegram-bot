@@ -1,210 +1,663 @@
+"""
+==========================================================
+ SmartFX Signal Bot V2.0
+ Main Application (app.py)
+==========================================================
+
+Reads live market data (Binance for crypto, TwelveData for forex),
+detects 4H trend, finds 1H/15M SMC entries using smc_analysis.py,
+sends signals to a public Telegram channel, sends bot health /
+statistics / daily summaries to a private Telegram chat, tracks
+trade outcomes, and keeps pair performance statistics.
+
+Deployment note: run with a SINGLE worker (e.g. `gunicorn -w 1 app:app`)
+since background threads and in-memory state are not shared across
+multiple worker processes.
+
+All state (active trades, statistics, last signals) is kept in memory.
+If the process restarts, that state is lost. Add a database if you need
+it to survive restarts/redeploys.
+"""
+
 import os
+import time
 import logging
 import threading
+from datetime import datetime
+
 from flask import Flask, jsonify
 import requests
-from datetime import datetime
-from smc_analysis import analyze_candles, get_trend_direction
 
-app = Flask(__name__)
+import smc_analysis
 
-# ---------------- CONFIG ----------------
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-PUBLIC_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_PUBLIC_CHANNEL_ID_HERE")
-PRIVATE_USER_ID = "8662582348"
 
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "")
+# ==========================================================
+# CONFIG
+# ==========================================================
 
-logging.basicConfig(level=logging.INFO)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_PUBLIC_CHANNEL_ID = os.environ.get("TELEGRAM_PUBLIC_CHANNEL_ID")
+TELEGRAM_PRIVATE_USER_ID = os.environ.get("TELEGRAM_PRIVATE_USER_ID")
+TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
 
-STATS = {
+TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+
+REQUEST_TIMEOUT = 10
+
+CRYPTO_PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+FOREX_PAIRS = ["EUR/USD", "GBP/USD", "XAU/USD", "USD/JPY"]
+
+TREND_TIMEFRAME = "4h"
+ENTRY_TIMEFRAMES = ["1h", "15m"]
+
+BINANCE_INTERVAL_MAP = {"4h": "4h", "1h": "1h", "15m": "15m"}
+TWELVEDATA_INTERVAL_MAP = {"4h": "4h", "1h": "1h", "15m": "15min"}
+
+ANALYSIS_LOOP_SECONDS = 300      # full scan every 5 minutes
+TRADE_MONITOR_SECONDS = 60       # check active trades every 1 minute
+SUMMARY_CHECK_SECONDS = 30       # check clock every 30 seconds
+
+CANDLE_LIMIT = 300
+
+
+# ==========================================================
+# LOGGING
+# ==========================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+logger = logging.getLogger("SmartFX")
+
+
+# ==========================================================
+# IN-MEMORY STATE
+# ==========================================================
+
+last_signals = {}      # key: "PAIR_TF" -> "BUY" | "SELL"
+active_trades = {}     # key: trade_id -> trade dict
+pair_stats = {}        # key: pair -> {"wins": int, "losses": int}
+
+global_stats = {
     "signals_sent": 0,
     "crypto_signals": 0,
     "forex_signals": 0,
     "wins": 0,
-    "losses": 0
+    "losses": 0,
+    "errors": 0,
 }
 
-LAST_SIGNALS = {}
-ACTIVE_TRADES = []
+state_lock = threading.Lock()
 
-CRYPTO_PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-FOREX_PAIRS = ["EUR/USD", "GBP/USD", "XAU/USD"]
-
-CRYPTO_TIMEFRAMES = {"15M": "15m", "1H": "1h"}
-FOREX_TIMEFRAMES = {"15M": "15min", "1H": "1h"}
+_threads_started = False
 
 
-# ---------------- TELEGRAM ----------------
-def send_to_channel(text):
-    requests.post(TELEGRAM_API_URL, json={
-        "chat_id": PUBLIC_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }, timeout=10)
+# ==========================================================
+# STARTUP CHECKS
+# ==========================================================
+
+def check_env():
+    missing = []
+    for name, value in [
+        ("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN),
+        ("TELEGRAM_PUBLIC_CHANNEL_ID", TELEGRAM_PUBLIC_CHANNEL_ID),
+        ("TELEGRAM_PRIVATE_USER_ID", TELEGRAM_PRIVATE_USER_ID),
+        ("TWELVEDATA_API_KEY", TWELVEDATA_API_KEY),
+    ]:
+        if not value:
+            missing.append(name)
+
+    if missing:
+        logger.warning(
+            "Missing environment variables: %s. Related features will fail until they are set.",
+            ", ".join(missing),
+        )
 
 
-def send_to_private(text):
-    requests.post(TELEGRAM_API_URL, json={
-        "chat_id": PRIVATE_USER_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }, timeout=10)
+# ==========================================================
+# TELEGRAM
+# ==========================================================
 
-
-def should_send_signal(symbol, timeframe, signal):
-    key = f"{symbol}_{timeframe}"
-    if LAST_SIGNALS.get(key) == signal["direction"]:
+def send_telegram_message(chat_id, text):
+    if not TELEGRAM_BOT_TOKEN or not chat_id:
+        log_error("Telegram send skipped: missing bot token or chat id.")
         return False
-    LAST_SIGNALS[key] = signal["direction"]
+
+    url = TELEGRAM_API_URL.format(token=TELEGRAM_BOT_TOKEN)
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+        if resp.status_code != 200:
+            log_error(f"Telegram error {resp.status_code}: {resp.text}")
+            return False
+        return True
+
+    except Exception as e:
+        log_error(f"Telegram send failed: {e}")
+        return False
+
+
+def send_public_signal(text):
+    return send_telegram_message(TELEGRAM_PUBLIC_CHANNEL_ID, text)
+
+
+def send_private_message(text):
+    return send_telegram_message(TELEGRAM_PRIVATE_USER_ID, text)
+
+
+# ==========================================================
+# LOGGING HELPERS
+# ==========================================================
+
+def log_error(msg):
+    logger.error(msg)
+    with state_lock:
+        global_stats["errors"] += 1
+
+
+def log_info(msg):
+    logger.info(msg)
+
+
+# ==========================================================
+# MARKET DATA - BINANCE (CRYPTO)
+# ==========================================================
+
+def fetch_binance_klines(symbol, interval, limit=CANDLE_LIMIT):
+    url = "https://api.binance.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    data = resp.json()
+
+    candles = []
+    for k in data:
+        candles.append({
+            "time": k[0],
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+        })
+
+    return candles
+
+
+def fetch_binance_price(symbol):
+    url = "https://api.binance.com/api/v3/ticker/price"
+    resp = requests.get(url, params={"symbol": symbol}, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    return float(resp.json()["price"])
+
+
+# ==========================================================
+# MARKET DATA - TWELVEDATA (FOREX)
+# ==========================================================
+
+def fetch_twelvedata_candles(symbol, interval, outputsize=CANDLE_LIMIT):
+    url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "outputsize": outputsize,
+        "apikey": TWELVEDATA_API_KEY,
+    }
+
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT + 5)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if "values" not in data:
+        raise ValueError(f"TwelveData error for {symbol}: {data}")
+
+    values = list(reversed(data["values"]))  # oldest -> newest
+
+    candles = []
+    for v in values:
+        candles.append({
+            "time": v["datetime"],
+            "open": float(v["open"]),
+            "high": float(v["high"]),
+            "low": float(v["low"]),
+            "close": float(v["close"]),
+        })
+
+    return candles
+
+
+def fetch_twelvedata_price(symbol):
+    url = "https://api.twelvedata.com/price"
+    params = {"symbol": symbol, "apikey": TWELVEDATA_API_KEY}
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    data = resp.json()
+    return float(data["price"])
+
+
+# ==========================================================
+# MARKET DATA DISPATCH
+# ==========================================================
+
+def get_candles(pair, timeframe, market_type):
+    if market_type == "crypto":
+        interval = BINANCE_INTERVAL_MAP[timeframe]
+        return fetch_binance_klines(pair, interval, CANDLE_LIMIT)
+    else:
+        interval = TWELVEDATA_INTERVAL_MAP[timeframe]
+        return fetch_twelvedata_candles(pair, interval, CANDLE_LIMIT)
+
+
+def get_current_price(pair, market_type):
+    if market_type == "crypto":
+        return fetch_binance_price(pair)
+    else:
+        return fetch_twelvedata_price(pair)
+
+
+def is_forex_open():
+    now = datetime.utcnow()
+    weekday = now.weekday()  # Monday=0 ... Sunday=6
+
+    if weekday == 5:
+        return False  # Saturday: closed all day
+
+    if weekday == 6:
+        return now.hour >= 22  # Sunday: opens ~22:00 UTC
+
+    if weekday == 4 and now.hour >= 22:
+        return False  # Friday: closes ~22:00 UTC
+
     return True
 
 
-# ---------------- MARKET STATUS ----------------
-def is_market_active():
-    h = datetime.utcnow().hour
-    return (7 <= h < 16) or (12 <= h < 21)
+# ==========================================================
+# SIGNAL MESSAGE FORMATTING
+# ==========================================================
+
+def format_signal_message(pair, timeframe, result):
+    return (
+        f"📊 *{pair}* | {timeframe.upper()}\n"
+        f"{result['direction']}\n\n"
+        f"Entry: `{result['entry']}`\n"
+        f"Stop Loss: `{result['sl']}`\n"
+        f"TP1: `{result['tp1']}`\n"
+        f"TP2: `{result['tp2']}`\n"
+        f"TP3: `{result['tp3']}`\n\n"
+        f"Confidence: {result['confidence']}%\n"
+        f"Risk: {result['risk']}"
+    )
 
 
-# ---------------- DATA ----------------
-def get_binance_candles(symbol, interval, limit=100):
+# ==========================================================
+# DUPLICATE PROTECTION
+# ==========================================================
+
+def is_duplicate_signal(pair, timeframe, direction):
+    key = f"{pair}_{timeframe}"
+    with state_lock:
+        return last_signals.get(key) == direction
+
+
+def store_last_signal(pair, timeframe, direction):
+    key = f"{pair}_{timeframe}"
+    with state_lock:
+        last_signals[key] = direction
+
+
+# ==========================================================
+# TRADE TRACKING
+# ==========================================================
+
+def open_trade(pair, timeframe, market_type, direction, result):
+    trade_id = f"{pair}_{timeframe}_{int(time.time() * 1000)}"
+
+    trade = {
+        "pair": pair,
+        "timeframe": timeframe,
+        "market_type": market_type,
+        "direction": direction,
+        "entry": result["entry"],
+        "sl": result["sl"],
+        "tp1": result["tp1"],
+        "tp2": result["tp2"],
+        "tp3": result["tp3"],
+        "opened_at": datetime.utcnow().isoformat(),
+    }
+
+    with state_lock:
+        active_trades[trade_id] = trade
+
+    return trade_id
+
+
+def close_trade(trade_id, trade, outcome):
+    pair = trade["pair"]
+
+    with state_lock:
+        active_trades.pop(trade_id, None)
+
+        stats = pair_stats.setdefault(pair, {"wins": 0, "losses": 0})
+
+        if outcome == "WIN":
+            stats["wins"] += 1
+            global_stats["wins"] += 1
+        else:
+            stats["losses"] += 1
+            global_stats["losses"] += 1
+
+    log_info(f"Trade closed: {pair} {trade['direction']} ({trade['timeframe']}) -> {outcome}")
+
+
+def monitor_trades():
+    with state_lock:
+        trades_snapshot = list(active_trades.items())
+
+    for trade_id, trade in trades_snapshot:
+        try:
+            price = get_current_price(trade["pair"], trade["market_type"])
+        except Exception as e:
+            log_error(f"Price fetch failed while monitoring {trade['pair']}: {e}")
+            continue
+
+        outcome = None
+
+        # TP1 hit counts as a WIN. SL hit counts as a LOSS.
+        if trade["direction"] == "BUY":
+            if price >= trade["tp1"]:
+                outcome = "WIN"
+            elif price <= trade["sl"]:
+                outcome = "LOSS"
+        else:
+            if price <= trade["tp1"]:
+                outcome = "WIN"
+            elif price >= trade["sl"]:
+                outcome = "LOSS"
+
+        if outcome:
+            close_trade(trade_id, trade, outcome)
+
+
+# ==========================================================
+# ANALYSIS PIPELINE
+# ==========================================================
+
+def analyze_pair(pair, market_type):
     try:
-        url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        resp = requests.get(url, timeout=15).json()
-
-        return [{
-            "open": float(c[1]),
-            "high": float(c[2]),
-            "low": float(c[3]),
-            "close": float(c[4])
-        } for c in resp]
-
+        trend_candles = get_candles(pair, TREND_TIMEFRAME, market_type)
     except Exception as e:
-        logging.error(f"Binance error: {e}")
-        return []
-
-
-def get_twelvedata_candles(symbol, interval, limit=100):
-    try:
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={limit}&apikey={TWELVE_DATA_API_KEY}"
-        resp = requests.get(url, timeout=15).json()
-
-        values = resp.get("values", [])
-        return [{
-            "open": float(c["open"]),
-            "high": float(c["high"]),
-            "low": float(c["low"]),
-            "close": float(c["close"])
-        } for c in reversed(values)]
-
-    except Exception as e:
-        logging.error(f"TwelveData error: {e}")
-        return []
-
-
-# ---------------- ANALYSIS ENGINE ----------------
-def run_analysis(symbols, timeframes, market_type):
-    print("===== ANALYSIS STARTED =====")
-    print("Market active:", is_market_active())
-
-    if not is_market_active():
-        print("MARKET CLOSED")
+        log_error(f"Failed to fetch {TREND_TIMEFRAME} candles for {pair}: {e}")
         return
 
-    for symbol in symbols:
-        for tf_label, tf in timeframes.items():
+    trend = smc_analysis.get_trend_direction(trend_candles)
+    if trend is None:
+        return
 
-            try:
-                candles = (
-                    get_binance_candles(symbol, tf)
-                    if market_type == "crypto"
-                    else get_twelvedata_candles(symbol, tf)
-                )
+    for timeframe in ENTRY_TIMEFRAMES:
+        try:
+            entry_candles = get_candles(pair, timeframe, market_type)
+        except Exception as e:
+            log_error(f"Failed to fetch {timeframe} candles for {pair}: {e}")
+            continue
 
-                if len(candles) < 50:
-                    continue
+        try:
+            result = smc_analysis.analyze_candles(entry_candles, trend_4h=trend)
+        except Exception as e:
+            log_error(f"Analysis error for {pair} ({timeframe}): {e}")
+            continue
 
-                closes = [c["close"] for c in candles]
+        if result is None:
+            continue
 
-                trend_4h = get_trend_direction(candles)
+        direction = "BUY" if "BUY" in result["direction"] else "SELL"
 
-                signal = analyze_candles(candles, trend_4h=trend_4h)
+        if is_duplicate_signal(pair, timeframe, direction):
+            continue
 
-                print(symbol, tf_label, signal)
+        store_last_signal(pair, timeframe, direction)
 
-                if not signal:
-                    continue
+        message = format_signal_message(pair, timeframe, result)
+        sent = send_public_signal(message)
 
-                if should_send_signal(symbol, tf_label, signal):
+        if sent:
+            with state_lock:
+                global_stats["signals_sent"] += 1
+                if market_type == "crypto":
+                    global_stats["crypto_signals"] += 1
+                else:
+                    global_stats["forex_signals"] += 1
 
-                    direction = signal["direction"]
-                    entry = signal["entry"]
-
-                    trade = {
-                        "symbol": symbol,
-                        "direction": "BUY" if "BUY" in direction else "SELL",
-                        "entry": entry,
-                        "tp": signal["tp3"],
-                        "sl": signal["sl"]
-                    }
-
-                    ACTIVE_TRADES.append(trade)
-
-                    send_to_channel(
-                        f"🚀 <b>{market_type.upper()}: {symbol}</b> ({tf_label})\n"
-                        f"{direction}\n"
-                        f"Entry: {entry}\n"
-                        f"TP: {signal['tp1']} | {signal['tp2']} | {signal['tp3']}\n"
-                        f"SL: {signal['sl']}\n"
-                        f"Confidence: {signal['confidence']}%\n"
-                        f"Risk: {signal['risk']}"
-                    )
-
-                    STATS["signals_sent"] += 1
-
-                    if market_type == "crypto":
-                        STATS["crypto_signals"] += 1
-                    else:
-                        STATS["forex_signals"] += 1
-
-            except Exception as e:
-                logging.error(f"{symbol} error: {e}")
+            log_info(f"Signal sent: {pair} {direction} ({timeframe}) confidence={result['confidence']}")
+            open_trade(pair, timeframe, market_type, direction, result)
 
 
-# ---------------- WORKERS ----------------
-def perform_crypto_analysis():
-    run_analysis(CRYPTO_PAIRS, CRYPTO_TIMEFRAMES, "crypto")
+def safe_analyze(pair, market_type):
+    try:
+        analyze_pair(pair, market_type)
+    except Exception as e:
+        log_error(f"Unhandled error analyzing {pair}: {e}")
 
 
-def perform_forex_analysis():
-    run_analysis(FOREX_PAIRS, FOREX_TIMEFRAMES, "forex")
+def run_crypto_analysis():
+    threads = []
+    for pair in CRYPTO_PAIRS:
+        t = threading.Thread(target=safe_analyze, args=(pair, "crypto"))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
 
 
-# ---------------- ROUTES ----------------
+def run_forex_analysis():
+    if not is_forex_open():
+        log_info("Forex market closed, skipping forex scan.")
+        return
+
+    threads = []
+    for pair in FOREX_PAIRS:
+        t = threading.Thread(target=safe_analyze, args=(pair, "forex"))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+
+
+# ==========================================================
+# PAIR PERFORMANCE / STATISTICS
+# ==========================================================
+
+def get_best_worst_pairs():
+    best_pair = "N/A"
+    worst_pair = "N/A"
+    best_rate = -1
+    worst_rate = 101
+
+    with state_lock:
+        snapshot = dict(pair_stats)
+
+    for pair, stats in snapshot.items():
+        total = stats["wins"] + stats["losses"]
+        if total == 0:
+            continue
+
+        rate = (stats["wins"] / total) * 100
+
+        if rate > best_rate:
+            best_rate = rate
+            best_pair = f"{pair} ({rate:.1f}%)"
+
+        if rate < worst_rate:
+            worst_rate = rate
+            worst_pair = f"{pair} ({rate:.1f}%)"
+
+    return best_pair, worst_pair
+
+
+def build_daily_summary():
+    with state_lock:
+        stats = dict(global_stats)
+        active_count = len(active_trades)
+
+    total_trades = stats["wins"] + stats["losses"]
+    win_rate = round((stats["wins"] / total_trades) * 100, 2) if total_trades else 0
+
+    best_pair, worst_pair = get_best_worst_pairs()
+
+    return (
+        "🤖 *SmartFX Daily Summary*\n\n"
+        "Status: ✅ Running\n"
+        f"Signals Sent: {stats['signals_sent']}\n"
+        f"Active Trades: {active_count}\n"
+        f"Wins: {stats['wins']}\n"
+        f"Losses: {stats['losses']}\n"
+        f"Win Rate: {win_rate}%\n"
+        f"Best Pair: {best_pair}\n"
+        f"Worst Pair: {worst_pair}\n"
+        f"Crypto Signals: {stats['crypto_signals']}\n"
+        f"Forex Signals: {stats['forex_signals']}\n"
+        f"Errors: {stats['errors']}"
+    )
+
+
+def send_daily_summary():
+    text = build_daily_summary()
+    sent = send_private_message(text)
+    if sent:
+        log_info("Daily summary sent to private chat.")
+    return sent
+
+
+# ==========================================================
+# BACKGROUND LOOPS
+# ==========================================================
+
+def analysis_loop():
+    while True:
+        try:
+            run_crypto_analysis()
+            run_forex_analysis()
+        except Exception as e:
+            log_error(f"Analysis loop error: {e}")
+
+        time.sleep(ANALYSIS_LOOP_SECONDS)
+
+
+def trade_monitor_loop():
+    while True:
+        try:
+            monitor_trades()
+        except Exception as e:
+            log_error(f"Trade monitor loop error: {e}")
+
+        time.sleep(TRADE_MONITOR_SECONDS)
+
+
+def daily_summary_loop():
+    sent_morning_on = None
+    sent_evening_on = None
+
+    while True:
+        now = datetime.utcnow()
+        today = now.date()
+
+        # Times are in UTC. Adjust the hour checks below if you want
+        # 8:00 / 20:00 in a different timezone.
+        if now.hour == 8 and now.minute == 0 and sent_morning_on != today:
+            send_daily_summary()
+            sent_morning_on = today
+
+        if now.hour == 20 and now.minute == 0 and sent_evening_on != today:
+            send_daily_summary()
+            sent_evening_on = today
+
+        time.sleep(SUMMARY_CHECK_SECONDS)
+
+
+def start_background_threads():
+    global _threads_started
+
+    if _threads_started:
+        return
+
+    _threads_started = True
+
+    check_env()
+
+    threading.Thread(target=analysis_loop, daemon=True).start()
+    threading.Thread(target=trade_monitor_loop, daemon=True).start()
+    threading.Thread(target=daily_summary_loop, daemon=True).start()
+
+    log_info("Background threads started: analysis, trade monitor, daily summary.")
+
+    send_private_message("🤖 SmartFX Signal Bot V2.0 started and running.")
+
+
+# ==========================================================
+# FLASK APP
+# ==========================================================
+
+app = Flask(__name__)
+
+
 @app.route("/")
-def home():
-    return "Bot is active", 200
+def index():
+    return "SmartFX Signal Bot V2.0 is running."
 
 
 @app.route("/analyze/crypto")
-def analyze_crypto():
-    threading.Thread(target=perform_crypto_analysis).start()
-    return jsonify({"status": "crypto running"})
+def analyze_crypto_route():
+    threading.Thread(target=run_crypto_analysis, daemon=True).start()
+    return jsonify({"status": "crypto analysis triggered"})
 
 
 @app.route("/analyze/forex")
-def analyze_forex():
-    threading.Thread(target=perform_forex_analysis).start()
-    return jsonify({"status": "forex running"})
+def analyze_forex_route():
+    threading.Thread(target=run_forex_analysis, daemon=True).start()
+    return jsonify({"status": "forex analysis triggered"})
 
 
 @app.route("/daily-summary")
-def daily_summary():
-    send_to_private(str(STATS))
-    return jsonify(STATS)
+def daily_summary_route():
+    sent = send_daily_summary()
+    return jsonify({"status": "sent" if sent else "failed"})
 
 
-# ---------------- RUN ----------------
+@app.route("/health")
+def health_route():
+    with state_lock:
+        stats = dict(global_stats)
+        active_count = len(active_trades)
+
+    return jsonify({
+        "status": "running",
+        "active_trades": active_count,
+        "signals_sent": stats["signals_sent"],
+        "crypto_signals": stats["crypto_signals"],
+        "forex_signals": stats["forex_signals"],
+        "wins": stats["wins"],
+        "losses": stats["losses"],
+        "errors": stats["errors"],
+        "checked_at": datetime.utcnow().isoformat(),
+    })
+
+
+# ==========================================================
+# ENTRY POINT
+# ==========================================================
+
+start_background_threads()
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+
