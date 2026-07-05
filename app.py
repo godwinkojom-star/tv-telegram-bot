@@ -37,7 +37,10 @@ import smc_analysis
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_PUBLIC_CHANNEL_ID = os.environ.get("TELEGRAM_PUBLIC_CHANNEL_ID")
-TELEGRAM_PRIVATE_USER_ID = os.environ.get("TELEGRAM_PRIVATE_USER_ID")
+# Falls back to your personal Telegram user ID if the env var isn't set,
+# so bot health / stats / daily summaries always reach you privately
+# and never end up in the public channel.
+TELEGRAM_PRIVATE_USER_ID = os.environ.get("TELEGRAM_PRIVATE_USER_ID", "8662582348")
 TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
@@ -47,15 +50,26 @@ REQUEST_TIMEOUT = 10
 CRYPTO_PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 FOREX_PAIRS = ["EUR/USD", "GBP/USD", "XAU/USD", "USD/JPY"]
 
+# Kraken uses different symbols than Binance. We keep the friendly names
+# above (for messages/stats/dedupe keys) and map them to Kraken's symbols
+# only when calling Kraken's API.
+CRYPTO_SYMBOL_MAP = {
+    "BTCUSDT": "XBTUSD",
+    "ETHUSDT": "ETHUSD",
+    "SOLUSDT": "SOLUSD",
+}
+
 TREND_TIMEFRAME = "4h"
 ENTRY_TIMEFRAMES = ["1h", "15m"]
 
-BINANCE_INTERVAL_MAP = {"4h": "4h", "1h": "1h", "15m": "15m"}
+# Kraken OHLC "interval" is in minutes.
+KRAKEN_INTERVAL_MAP = {"4h": 240, "1h": 60, "15m": 15}
 TWELVEDATA_INTERVAL_MAP = {"4h": "4h", "1h": "1h", "15m": "15min"}
 
-ANALYSIS_LOOP_SECONDS = 300      # full scan every 5 minutes
-TRADE_MONITOR_SECONDS = 60       # check active trades every 1 minute
+ANALYSIS_LOOP_SECONDS = 60       # full scan every 1 minute (was 5 minutes)
+TRADE_MONITOR_SECONDS = 20       # check active trades every 20 seconds (was 1 minute)
 SUMMARY_CHECK_SECONDS = 30       # check clock every 30 seconds
+TREND_CACHE_SECONDS = 900        # reuse the 4H trend for 15 minutes instead of refetching every scan
 
 CANDLE_LIMIT = 300
 
@@ -79,6 +93,7 @@ logger = logging.getLogger("SmartFX")
 last_signals = {}      # key: "PAIR_TF" -> "BUY" | "SELL"
 active_trades = {}     # key: trade_id -> trade dict
 pair_stats = {}        # key: pair -> {"wins": int, "losses": int}
+trend_cache = {}       # key: "PAIR_MARKETTYPE" -> {"trend": str, "fetched_at": float}
 
 global_stats = {
     "signals_sent": 0,
@@ -167,35 +182,53 @@ def log_info(msg):
 
 
 # ==========================================================
-# MARKET DATA - BINANCE (CRYPTO)
+# MARKET DATA - KRAKEN (CRYPTO)
 # ==========================================================
+# Kraken's public endpoints need no API key and aren't blocked on
+# cloud hosts the way Binance is.
 
-def fetch_binance_klines(symbol, interval, limit=CANDLE_LIMIT):
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
+def fetch_kraken_ohlc(symbol, interval_minutes):
+    url = "https://api.kraken.com/0/public/OHLC"
+    params = {"pair": symbol, "interval": interval_minutes}
 
     resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
 
+    if data.get("error"):
+        raise ValueError(f"Kraken error for {symbol}: {data['error']}")
+
+    result = data["result"]
+    pair_key = next(k for k in result.keys() if k != "last")
+    rows = result[pair_key]
+
     candles = []
-    for k in data:
+    for row in rows:
         candles.append({
-            "time": k[0],
-            "open": float(k[1]),
-            "high": float(k[2]),
-            "low": float(k[3]),
-            "close": float(k[4]),
+            "time": row[0],
+            "open": float(row[1]),
+            "high": float(row[2]),
+            "low": float(row[3]),
+            "close": float(row[4]),
         })
 
     return candles
 
 
-def fetch_binance_price(symbol):
-    url = "https://api.binance.com/api/v3/ticker/price"
-    resp = requests.get(url, params={"symbol": symbol}, timeout=REQUEST_TIMEOUT)
+def fetch_kraken_price(symbol):
+    url = "https://api.kraken.com/0/public/Ticker"
+    params = {"pair": symbol}
+
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
-    return float(resp.json()["price"])
+    data = resp.json()
+
+    if data.get("error"):
+        raise ValueError(f"Kraken ticker error for {symbol}: {data['error']}")
+
+    result = data["result"]
+    pair_key = next(iter(result.keys()))
+    return float(result[pair_key]["c"][0])
 
 
 # ==========================================================
@@ -248,8 +281,9 @@ def fetch_twelvedata_price(symbol):
 
 def get_candles(pair, timeframe, market_type):
     if market_type == "crypto":
-        interval = BINANCE_INTERVAL_MAP[timeframe]
-        return fetch_binance_klines(pair, interval, CANDLE_LIMIT)
+        kraken_symbol = CRYPTO_SYMBOL_MAP[pair]
+        interval = KRAKEN_INTERVAL_MAP[timeframe]
+        return fetch_kraken_ohlc(kraken_symbol, interval)
     else:
         interval = TWELVEDATA_INTERVAL_MAP[timeframe]
         return fetch_twelvedata_candles(pair, interval, CANDLE_LIMIT)
@@ -257,7 +291,7 @@ def get_candles(pair, timeframe, market_type):
 
 def get_current_price(pair, market_type):
     if market_type == "crypto":
-        return fetch_binance_price(pair)
+        return fetch_kraken_price(CRYPTO_SYMBOL_MAP[pair])
     else:
         return fetch_twelvedata_price(pair)
 
@@ -291,6 +325,8 @@ def format_signal_message(pair, timeframe, result):
         f"TP1: `{result['tp1']}`\n"
         f"TP2: `{result['tp2']}`\n"
         f"TP3: `{result['tp3']}`\n\n"
+        f"Support: `{result['support']}`\n"
+        f"Resistance: `{result['resistance']}`\n\n"
         f"Confidence: {result['confidence']}%\n"
         f"Risk: {result['risk']}"
     )
@@ -389,14 +425,34 @@ def monitor_trades():
 # ANALYSIS PIPELINE
 # ==========================================================
 
-def analyze_pair(pair, market_type):
+def get_cached_trend(pair, market_type):
+    cache_key = f"{pair}_{market_type}"
+    now = time.time()
+
+    with state_lock:
+        cached = trend_cache.get(cache_key)
+
+    if cached and (now - cached["fetched_at"] < TREND_CACHE_SECONDS):
+        return cached["trend"]
+
     try:
         trend_candles = get_candles(pair, TREND_TIMEFRAME, market_type)
     except Exception as e:
         log_error(f"Failed to fetch {TREND_TIMEFRAME} candles for {pair}: {e}")
-        return
+        # If we have a stale cached trend, better to reuse it than to
+        # skip the pair entirely because of one failed request.
+        return cached["trend"] if cached else None
 
     trend = smc_analysis.get_trend_direction(trend_candles)
+
+    with state_lock:
+        trend_cache[cache_key] = {"trend": trend, "fetched_at": now}
+
+    return trend
+
+
+def analyze_pair(pair, market_type):
+    trend = get_cached_trend(pair, market_type)
     if trend is None:
         return
 
@@ -634,30 +690,4 @@ def daily_summary_route():
 @app.route("/health")
 def health_route():
     with state_lock:
-        stats = dict(global_stats)
-        active_count = len(active_trades)
-
-    return jsonify({
-        "status": "running",
-        "active_trades": active_count,
-        "signals_sent": stats["signals_sent"],
-        "crypto_signals": stats["crypto_signals"],
-        "forex_signals": stats["forex_signals"],
-        "wins": stats["wins"],
-        "losses": stats["losses"],
-        "errors": stats["errors"],
-        "checked_at": datetime.utcnow().isoformat(),
-    })
-
-
-# ==========================================================
-# ENTRY POINT
-# ==========================================================
-
-start_background_threads()
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
-
+ 
