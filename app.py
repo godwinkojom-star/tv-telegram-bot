@@ -32,6 +32,9 @@ from flask import Flask, jsonify
 import requests
 from PIL import Image, ImageDraw, ImageFont
 import psycopg
+from dotenv import load_dotenv
+
+load_dotenv()
 
 try:
     from pywebpush import webpush, WebPushException
