@@ -34,11 +34,8 @@ class ScalperConfig:
     stop_atr_multiplier: float = 1.20
     min_stop_atr: float = 0.35
     max_stop_atr: float = 2.00
-    target_atr_multiplier: float = 1.50
-    minimum_rr: float = 1.00
     allow_immediate_reversal: bool = True
     one_position_per_direction: bool = True
-    max_hold_bars: int = 30
     same_direction_cooldown_bars: int = 3
     require_5m_confirmation: bool = True
     confirmation_required: bool = True
@@ -84,11 +81,8 @@ class ScalperConfig:
             stop_atr_multiplier=self.stop_atr_multiplier,
             min_stop_atr=self.min_stop_atr,
             max_stop_atr=self.max_stop_atr,
-            target_atr_multiplier=self.target_atr_multiplier,
-            minimum_rr=self.minimum_rr,
             allow_immediate_reversal=self.allow_immediate_reversal,
             one_position_per_direction=self.one_position_per_direction,
-            max_hold_bars=self.max_hold_bars,
             same_direction_cooldown_bars=self.same_direction_cooldown_bars,
             require_5m_confirmation=self.require_5m_confirmation,
             confirmation_required=self.confirmation_required,

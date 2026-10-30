@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 import pandas as pd
@@ -18,10 +18,11 @@ class Trade:
     entry_time: object
     entry_price: float
     stop_loss: float
-    take_profit: float
     risk_amount: float
     quantity: float
-    rr: float
+    rr: float = 0.0
+    max_favorable_r: float = 0.0
+    reached_milestones: list[int] = field(default_factory=list)
     exit_time: Optional[object] = None
     exit_price: Optional[float] = None
     exit_reason: Optional[str] = None
@@ -69,13 +70,13 @@ class GoldScalperBacktester:
     def _move(self, direction: str, entry: float, exit_: float) -> float:
         return exit_ - entry if direction == "BUY" else entry - exit_
 
-    def _validate_levels(self, direction: str, entry: float, sl: float, tp: float) -> bool:
-        if not all(math.isfinite(v) for v in (entry, sl, tp)):
+    def _validate_levels(self, direction: str, entry: float, sl: float) -> bool:
+        if not all(math.isfinite(v) for v in (entry, sl)):
             return False
         if direction == "BUY":
-            return sl < entry < tp
+            return sl < entry
         if direction == "SELL":
-            return tp < entry < sl
+            return sl > entry
         return False
 
     def run(self, df1: pd.DataFrame, df5: pd.DataFrame) -> BacktestResult:
@@ -109,15 +110,15 @@ class GoldScalperBacktester:
                 if position.direction == "BUY":
                     if low <= position.stop_loss:
                         exit_price, reason = position.stop_loss, "SL"
-                    elif high >= position.take_profit:
-                        exit_price, reason = position.take_profit, "TP"
+                    favourable = max(0.0, float(high) - position.entry_price)
                 else:
                     if high >= position.stop_loss:
                         exit_price, reason = position.stop_loss, "SL"
-                    elif low <= position.take_profit:
-                        exit_price, reason = position.take_profit, "TP"
-                if reason is None and position.hold_bars >= max(1, int(self.cfg.max_hold_bars)):
-                    exit_price, reason = float(bar["close"]), "TIMEOUT"
+                    favourable = max(0.0, position.entry_price - float(low))
+                risk_per_unit = abs(position.entry_price - position.stop_loss)
+                if risk_per_unit > 0:
+                    position.max_favorable_r = max(position.max_favorable_r, favourable / risk_per_unit)
+                    position.reached_milestones = [m for m in (1, 2, 3, 4, 5) if position.max_favorable_r >= m]
                 if reason:
                     fill = self._fill_price(
                         "SELL" if position.direction == "BUY" else "BUY", float(exit_price)
@@ -140,11 +141,7 @@ class GoldScalperBacktester:
                 can_enter = not in_cooldown
                 if position is not None and direction == position.direction and self.cfg.one_position_per_direction:
                     can_enter = False
-                if (
-                    position is not None
-                    and direction != position.direction
-                    and self.cfg.allow_immediate_reversal
-                ):
+                if position is not None and direction != position.direction:
                     close_px = self._fill_price(
                         "SELL" if position.direction == "BUY" else "BUY", float(bar["close"])
                     )
@@ -154,26 +151,19 @@ class GoldScalperBacktester:
                     trades.append(position)
                     last_entry_bar[position.direction] = i
                     position = None
-                    can_enter = not in_cooldown
+                    can_enter = self.cfg.allow_immediate_reversal and not in_cooldown
 
                 if position is None and can_enter and direction in ("BUY", "SELL"):
                     entry = self._fill_price(direction, float(next_bar["open"]))
                     sl = float(signal.get("sl", float("nan")))
-                    tp = float(signal.get("tp", float("nan")))
-                    if self._validate_levels(direction, entry, sl, tp):
+                    if self._validate_levels(direction, entry, sl):
                         risk_per_unit = abs(entry - sl) * float(self.cfg.point_value)
-                        reward_per_unit = abs(tp - entry) * float(self.cfg.point_value)
                         risk_amount = max(0.0, balance * float(self.cfg.risk_percent) / 100.0)
-                        if (
-                            all(math.isfinite(x) for x in (entry, sl, tp, risk_per_unit, reward_per_unit))
-                            and risk_per_unit > 0
-                            and reward_per_unit > 0
-                            and risk_amount > 0
-                        ):
+                        if math.isfinite(risk_per_unit) and risk_per_unit > 0 and risk_amount > 0:
                             qty = risk_amount / risk_per_unit
-                            rr = reward_per_unit / risk_per_unit
                             position = Trade(
-                                trade_id, direction, one.index[i + 1], entry, sl, tp, risk_amount, qty, rr
+                                trade_id, direction, one.index[i + 1], entry, sl, risk_amount, qty, 0.0,
+                                reached_milestones=[]
                             )
                             trade_id += 1
                             last_entry_bar[direction] = i

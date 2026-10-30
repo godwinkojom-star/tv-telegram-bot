@@ -29,13 +29,20 @@ _engine: Optional[PaperEngine] = None
 _config = ScalperConfig()
 _last_status: Dict[str, Any] = {"state": "NOT_STARTED"}
 _event_callbacks: List[Callable[[str, Dict[str, Any]], None]] = []
+_position_loader: Optional[Callable[[], Dict[str, Any]]] = None
 _loop_seconds = 30  # Gold loop cadence; data itself is freshness-gated
 
 
 def register_event_callback(cb: Callable[[str, Dict[str, Any]], None]) -> None:
-    """Optional: app.py can register to receive Gold events (signal, close, error)."""
+    """Register an app callback for persisted signal/trade lifecycle events."""
     if cb not in _event_callbacks:
         _event_callbacks.append(cb)
+
+
+def set_position_loader(loader: Optional[Callable[[], Dict[str, Any]]]) -> None:
+    """Provide a DB-backed loader so an open paper position survives restarts."""
+    global _position_loader
+    _position_loader = loader
 
 
 def _emit(event_type: str, payload: Dict[str, Any]) -> None:
@@ -89,7 +96,7 @@ def _bundle_to_frames(bundle: Dict[str, Any]):
 
 
 def _progress_for_evaluation(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Progress is completed strategy gates, not a win-probability estimate."""
+    """Report completed strategy gates, never an estimated win probability."""
     if result.get("status") == "SIGNAL":
         return {"progress_pct": 100, "stage": "Signal confirmed · 1m reversal + 5m confirmation", "status": "SIGNAL"}
     reason = str(result.get("reason") or "no_signal")
@@ -113,11 +120,8 @@ def _progress_for_evaluation(result: Dict[str, Any]) -> Dict[str, Any]:
         pct, stage = 82, "Waiting for directional momentum"
     elif reason in ("entry_too_far_from_fast_ema", "entry_overextended"):
         pct, stage = 90, "Reversal found · entry quality rejected"
-    elif reason in (
-        "invalid_levels", "non_positive_risk_or_reward",
-        "stop_distance_outside_allowed_range", "reward_risk_too_low",
-    ):
-        pct, stage = 96, "Checking stop-loss / take-profit levels"
+    elif reason == "stop_distance_outside_allowed_range":
+        pct, stage = 96, "Checking stop-loss distance"
     else:
         pct, stage = 15, "Scanning · no valid setup yet"
     return {"progress_pct": pct, "stage": stage, "status": "NO_SETUP"}
@@ -154,16 +158,12 @@ def _run_once() -> Dict[str, Any]:
             scan_status = "WAITING_DATA" if progress_pct == 0 else "SCANNING"
         else:
             progress_pct, stage, scan_status = 0, status.reason or "Gold data not ready", "ERROR"
+        details = status.details or {}
         progress_payload = {
-            "status": scan_status,
-            "progress_pct": progress_pct,
-            "stage": stage,
-            "reason": status.reason,
-            "snapshot_status": raw_state,
-            "candles_1m": status.details.get("1m_bars"),
-            "candles_5m": status.details.get("5m_bars"),
-            "direction": None,
-            "last_update": pd.Timestamp.utcnow().isoformat(),
+            "status": scan_status, "progress_pct": progress_pct, "stage": stage,
+            "reason": status.reason, "snapshot_status": raw_state,
+            "candles_1m": details.get("1m_bars"), "candles_5m": details.get("5m_bars"),
+            "direction": None, "last_update": pd.Timestamp.utcnow().isoformat(),
         }
         result.update(progress_payload)
         with _runner_lock:
@@ -179,8 +179,6 @@ def _run_once() -> Dict[str, Any]:
             _last_status = result
         return result
 
-    # Evaluate the same production strategy separately for a human-readable gate
-    # progress value. The paper engine independently evaluates before it can open.
     diagnostic = evaluate(df1, df5, _config)
     progress = _progress_for_evaluation(diagnostic)
     progress_payload = {
@@ -196,49 +194,57 @@ def _run_once() -> Dict[str, Any]:
     with _runner_lock:
         if _engine is None:
             _engine = PaperEngine(_config)
+            if _position_loader is not None:
+                try:
+                    persisted = _position_loader() or {}
+                    _engine.restore_state(persisted)
+                except Exception as restore_error:
+                    logger.exception("Could not restore persisted Gold paper position: %s", restore_error)
         prev_closed = len(_engine.closed_trades)
-        prev_position = _engine.position
-        prev_pos = prev_position.direction if prev_position else None
-        prev_entry_time = str(prev_position.entry_time) if prev_position else None
-        prev_entry_price = prev_position.entry_price if prev_position else None
+        prev_trade_id = _engine.position.trade_id if _engine.position else None
         engine_status = _engine.on_bar(df1, df5)
         result.update(engine_status)
         result.update(progress_payload)
         result["engine"] = engine_status
         _last_status = result
-
-        # Scanner progress is real gate completion, not trade-win probability.
         _emit("gold_scan_update", progress_payload)
 
-        # Emit closes BEFORE opens. On a confirmed reversal, the old signal must
-        # be closed before `_last` is replaced by the newly opened signal ID.
-        new_closed = _engine.closed_trades[prev_closed:]
-        for trade in new_closed:
-            _emit("gold_trade_closed", trade)
-
-        current = _engine.position
-        current_entry_time = str(current.entry_time) if current else None
-        current_entry_price = current.entry_price if current else None
-        opened_or_reversed = bool(current) and (
-            prev_position is None
-            or current.direction != prev_pos
-            or current_entry_time != prev_entry_time
-            or current_entry_price != prev_entry_price
-        )
-        if opened_or_reversed:
-            _emit(
-                "gold_signal_opened",
-                {
-                    "direction": current.direction,
-                    "entry": current.entry_price,
-                    "sl": current.stop_loss,
-                    "tp": current.take_profit,
-                    "rr": current.rr,
-                    "risk_percent": float(_config.risk_percent),
-                    "balance": _engine.balance,
-                    "entry_time": current_entry_time,
-                },
-            )
+        # Emit events for Telegram / dashboard
+        if len(_engine.closed_trades) > prev_closed:
+            for trade in _engine.closed_trades[prev_closed:]:
+                _emit("gold_trade_closed", trade)
+        if _engine.position and _engine.position.trade_id != prev_trade_id:
+            p = _engine.position
+            _emit("gold_signal_opened", {
+                "trade_id": p.trade_id,
+                "direction": p.direction,
+                "entry": p.entry_price,
+                "sl": p.stop_loss,
+                "risk_amount": p.risk_amount,
+                "risk_percent": float(_config.risk_percent),
+                "quantity": p.quantity,
+                "point_value": float(_config.point_value),
+                "initial_risk_per_unit": p.initial_risk_per_unit,
+                "balance_before": p.initial_balance,
+                "entry_time": str(p.entry_time),
+                "hold_bars": p.hold_bars,
+                "bar_time": str(df1.index[-1]),
+            })
+        if _engine.position:
+            p = _engine.position
+            _emit("gold_trade_progress", {
+                "trade_id": p.trade_id,
+                "direction": p.direction,
+                "current_price": float(df1.iloc[-1]["close"]),
+                "unrealized_pnl": p.unrealized_pnl,
+                "current_rr": p.current_rr,
+                "max_favorable_r": p.max_favorable_r,
+                "reached_milestones": list(p.reached_milestones),
+                "hold_bars": p.hold_bars,
+                "bar_time": str(df1.index[-1]),
+            })
+        # Checkpoint only after any close/open events for this bar have been saved.
+        _emit("gold_bar_processed", {"bar_time": str(df1.index[-1])})
 
     return result
 
@@ -250,14 +256,8 @@ def _loop():
             _run_once()
         except Exception as e:
             logger.exception("Gold runner iteration failed: %s", e)
-            error_payload = {
-                "state": "ERROR", "status": "ERROR", "reason": str(e),
-                "progress_pct": 0, "stage": "Gold scan error · waiting for recovery",
-                "snapshot_status": "ERROR", "direction": None,
-            }
             with _runner_lock:
-                _last_status = error_payload
-            _emit("gold_scan_update", error_payload)
+                _last_status = {"state": "ERROR", "reason": str(e)}
             _emit("gold_runner_error", {"error": str(e)})
         _stop_event.wait(_loop_seconds)
     logger.info("Gold Reversal Scalper runner loop stopped")

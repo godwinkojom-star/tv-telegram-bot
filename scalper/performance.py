@@ -19,6 +19,18 @@ def summarize(trades: Iterable) -> dict:
     losses = [p for p in pnls if p < 0]
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
+    dict_trades = [t for t in trades if isinstance(t, dict)]
+    realized_rr = [float(t.get("realized_rr", t.get("pnl_r", 0)) or 0) for t in dict_trades]
+    max_rr = [float(t.get("max_favorable_r", 0) or 0) for t in dict_trades]
+    milestone_counts = {f"reached_{n}r": sum(1 for value in max_rr if value >= n) for n in (1, 2, 3, 4)}
+    milestone_counts["reached_5r_plus"] = sum(1 for value in max_rr if value >= 5)
+    for threshold in (1, 2, 3, 4):
+        milestone_counts[f"reached_{threshold}r_pct"] = (
+            milestone_counts[f"reached_{threshold}r"] / len(max_rr) * 100 if max_rr else 0.0
+        )
+    milestone_counts["reached_5r_plus_pct"] = (
+        milestone_counts["reached_5r_plus"] / len(max_rr) * 100 if max_rr else 0.0
+    )
     return {
         "total_trades": len(pnls),
         "wins": len(wins),
@@ -33,6 +45,9 @@ def summarize(trades: Iterable) -> dict:
         else (math.inf if gross_profit else 0.0),
         "best_trade": max(pnls) if pnls else 0.0,
         "worst_trade": min(pnls) if pnls else 0.0,
+        "average_realized_rr": (sum(realized_rr) / len(realized_rr)) if realized_rr else 0.0,
+        "average_max_favorable_r": (sum(max_rr) / len(max_rr)) if max_rr else 0.0,
+        **milestone_counts,
     }
 
 

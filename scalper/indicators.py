@@ -1,5 +1,5 @@
 """
-SmartFX Experimental Gold Reversal Scalper
+SmartFX Gold Reversal Scalper
 Indicator calculations.
 
 No Telegram. No database. No MT5. No app.py. No trade state.

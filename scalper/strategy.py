@@ -1,5 +1,5 @@
 """
-SmartFX Experimental Gold Reversal Scalper
+SmartFX Gold Reversal Scalper
 Original reversal strategy engine.
 
 Concept:
@@ -209,13 +209,11 @@ def calculate_trade_levels(df1: pd.DataFrame, direction: str, cfg: ScalperConfig
         atr_stop = entry - cfg.stop_atr_multiplier * atr_value
         stop = min(structural_stop, atr_stop)
         risk = entry - stop
-        target = entry + cfg.target_atr_multiplier * atr_value
     else:
         structural_stop = recent_high + cfg.stop_atr_multiplier * atr_value * 0.25
         atr_stop = entry + cfg.stop_atr_multiplier * atr_value
         stop = max(structural_stop, atr_stop)
         risk = stop - entry
-        target = entry - cfg.target_atr_multiplier * atr_value
     risk_atr = risk / atr_value
     if risk_atr < cfg.min_stop_atr or risk_atr > cfg.max_stop_atr:
         return {
@@ -223,30 +221,15 @@ def calculate_trade_levels(df1: pd.DataFrame, direction: str, cfg: ScalperConfig
             "reason": "stop_distance_outside_allowed_range",
             "entry": entry,
             "sl": stop,
-            "tp": target,
             "risk": risk,
             "risk_atr": risk_atr,
-        }
-    reward = abs(target - entry)
-    rr = reward / risk if risk > 0 else 0
-    if rr < cfg.minimum_rr:
-        return {
-            "valid": False,
-            "reason": "reward_risk_too_low",
-            "entry": entry,
-            "sl": stop,
-            "tp": target,
-            "risk": risk,
-            "rr": rr,
         }
     return {
         "valid": True,
         "entry": entry,
         "sl": stop,
-        "tp": target,
         "risk": risk,
         "risk_atr": risk_atr,
-        "rr": rr,
     }
 
 
@@ -255,7 +238,7 @@ def evaluate(
     df5: pd.DataFrame,
     cfg: Optional[ScalperConfig] = None,
 ) -> Dict[str, Any]:
-    """Main strategy evaluation. Returns NO_SIGNAL or SIGNAL with levels."""
+    """Main strategy evaluation. Returns NO_SIGNAL or SIGNAL with entry and SL only."""
     cfg = cfg or ScalperConfig()
     try:
         df1 = clean_ohlc(df1)
@@ -314,17 +297,15 @@ def evaluate(
 
     return {
         "status": "SIGNAL",
-        "strategy": "EXPERIMENTAL_GOLD_REVERSAL_SCALPER",
+        "strategy": "GOLD_REVERSAL_SCALPER",
         "pair": cfg.pair,
         "direction": direction,
         "timeframe": cfg.entry_timeframe,
         "confirmation_timeframe": cfg.confirmation_timeframe,
         "entry": levels["entry"],
         "sl": levels["sl"],
-        "tp": levels["tp"],
         "risk": levels["risk"],
         "risk_atr": levels["risk_atr"],
-        "rr": levels["rr"],
         "rsi": rsi_value,
         "confirmation": confirmation,
         "atr": volatility["atr1"],

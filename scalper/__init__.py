@@ -1,4 +1,4 @@
-"""Experimental SmartFX scalper package."""
+"""SmartFX Gold Reversal Scalper package."""
 
 from .shared_cache_adapter import CacheSnapshot, get_gold_scalper_bundle, get_snapshot
 from .data_contract import ScalperDataStatus, classify_bundle
