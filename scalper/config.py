@@ -37,6 +37,9 @@ class ScalperConfig:
     allow_immediate_reversal: bool = True
     one_position_per_direction: bool = True
     same_direction_cooldown_bars: int = 3
+    # Gold paper exits: lock +1R after the +1R trigger; fixed full exit at +3R.
+    profit_lock_r: float = 1.0
+    take_profit_r: float = 3.0
     require_5m_confirmation: bool = True
     confirmation_required: bool = True
     starting_balance: float = 1000.0
@@ -84,6 +87,8 @@ class ScalperConfig:
             allow_immediate_reversal=self.allow_immediate_reversal,
             one_position_per_direction=self.one_position_per_direction,
             same_direction_cooldown_bars=self.same_direction_cooldown_bars,
+            profit_lock_r=self.profit_lock_r,
+            take_profit_r=self.take_profit_r,
             require_5m_confirmation=self.require_5m_confirmation,
             confirmation_required=self.confirmation_required,
             starting_balance=self.starting_balance,

@@ -72,6 +72,8 @@ def get_status() -> Dict[str, Any]:
             base["performance"] = summarize(_engine.closed_trades)
         base["risk_percent"] = float(_config.risk_percent)
         base["point_value"] = float(_config.point_value)
+        base["profit_lock_r"] = float(_config.profit_lock_r)
+        base["take_profit_r"] = float(_config.take_profit_r)
         base["runner_alive"] = _thread is not None and _thread.is_alive()
         return base
 
@@ -203,6 +205,8 @@ def _run_once() -> Dict[str, Any]:
         prev_closed = len(_engine.closed_trades)
         prev_trade_id = _engine.position.trade_id if _engine.position else None
         engine_status = _engine.on_bar(df1, df5)
+        for event_name, event_payload in _engine.drain_events():
+            _emit(event_name, event_payload)
         result.update(engine_status)
         result.update(progress_payload)
         result["engine"] = engine_status
@@ -220,6 +224,11 @@ def _run_once() -> Dict[str, Any]:
                 "direction": p.direction,
                 "entry": p.entry_price,
                 "sl": p.stop_loss,
+                "active_stop_loss": p.active_stop_loss,
+                "take_profit": p.take_profit,
+                "profit_lock_trigger": (p.entry_price + p.initial_risk_per_unit * _config.profit_lock_r) if p.direction == "BUY" else (p.entry_price - p.initial_risk_per_unit * _config.profit_lock_r),
+                "profit_lock_r": float(_config.profit_lock_r),
+                "take_profit_r": float(_config.take_profit_r),
                 "risk_amount": p.risk_amount,
                 "risk_percent": float(_config.risk_percent),
                 "quantity": p.quantity,
@@ -236,6 +245,11 @@ def _run_once() -> Dict[str, Any]:
                 "trade_id": p.trade_id,
                 "direction": p.direction,
                 "current_price": float(df1.iloc[-1]["close"]),
+                "original_stop_loss": p.stop_loss,
+                "active_stop_loss": p.active_stop_loss,
+                "take_profit": p.take_profit,
+                "breakeven_activated": p.breakeven_activated,
+                "breakeven_time": str(p.breakeven_time) if p.breakeven_time is not None else None,
                 "unrealized_pnl": p.unrealized_pnl,
                 "current_rr": p.current_rr,
                 "max_favorable_r": p.max_favorable_r,
